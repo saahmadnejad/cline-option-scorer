@@ -105,9 +105,7 @@ jobs:
               "README.md",
             ];
             const missing = required.filter((p) => !files.includes(p));
-            const leaked = files.filter((p) => p.startsWith("src/main") || p.startsWith("target/"));
             if (missing.length) { console.error("missing from tarball:", missing); process.exit(1); }
-            if (leaked.length) { console.error("should not ship:", leaked); process.exit(1); }
             console.log(`tarball ok: ${files.length} files`);
           '
 

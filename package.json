@@ -29,10 +29,7 @@
     "prepublishOnly": "npm run verify"
   },
   "files": [
-    "src/cli.js",
-    "src/jev-client.js",
-    "src/cline-interceptor.js",
-    "!src/main",
+    "src/",
     "hooks/",
     "scripts/",
     "skills/",
