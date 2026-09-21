@@ -77,6 +77,18 @@ jobs:
 
       - run: npm run verify
 
+      - name: Skip if this version is already published
+        id: published
+        run: |
+          PKG="$(npm pkg get name | tr -d '"')"
+          VERSION="$(npm pkg get version | tr -d '"')"
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$PKG@$VERSION is already on npm - the verification above is the release check, skipping publish"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Assert the tarball ships what we expect
         run: |
           npm pack --dry-run --json > /tmp/pack.json
@@ -100,6 +112,7 @@ jobs:
           '
 
       - name: Publish to npm
+        if: steps.published.outputs.already != 'true'
         run: |
           VERSION="$(npm pkg get version | tr -d '"')"
           if [[ "$VERSION" == *-* ]]; then

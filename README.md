@@ -159,6 +159,26 @@ Two one-time setup items (both outside this repo):
    npm publish   # `prepublishOnly` re-runs `npm run verify` first
    ```
 
+   Because npm requires the package to exist before you can configure its
+   trusted publisher, the **first version must be published manually** (OIDC
+   attestation is impossible for a package that doesn't exist yet — see
+   [npm/cli#8544](https://github.com/npm/cli/issues/8544), still open).
+
+   > ⚠️ **Bootstrap sequence — don't let versions collide.** Pick one path:
+   >
+   > - **A. Manual publish IS the first release.** Publish `0.1.0` by hand,
+   >   register the trusted publisher, then release `0.1.0` on GitHub. The
+   >   workflow verifies the tarball and *skips* the publish (version already
+   >   on npm) — green build, no duplicate. Bump to `0.1.1`+ for the next
+   >   release.
+   > - **B. Bump before the first release.** After the manual publish of
+   >   `0.1.0`, bump to `0.1.1` *first*, then create the `v0.1.1` release so
+   >   the workflow performs the real first OIDC publish.
+   >
+   > Either way, never re-release a version number that is already on npm —
+   > the tag check passes (tag matches `package.json`) and only the idempotency
+   > step saves you from a red build.
+
 Manual publish (emergencies only — same command the workflow runs):
 
 ```bash
