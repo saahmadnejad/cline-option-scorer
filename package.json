@@ -1,0 +1,61 @@
+{
+  "name": "@donbee/cline-option-scorer",
+  "version": "0.1.0",
+  "description": "Add percentage to each Cline ask_followup_question option using Jev 1.13 (TypeSafe / OpenCode Zen jev-1.13-free)",
+  "type": "module",
+  "main": "src/jev-client.js",
+  "bin": {
+    "cline-option-scorer": "./src/cli.js",
+    "cline-jev-mcp": "./mcp-server.js",
+    "cline-option-scorer-install-hook": "./scripts/install-hook.mjs"
+  },
+  "cline": {
+    "plugins": [{ "paths": ["./cline-plugin.js"], "capabilities": ["tools", "hooks"] }]
+  },
+  "peerDependencies": {
+    "@cline/sdk": "*"
+  },
+  "peerDependenciesMeta": {
+    "@cline/sdk": { "optional": true }
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "demo": "node src/cli.js --demo",
+    "demo:zen-free": "node src/cli.js --demo --provider zen-free",
+    "test": "node --test tests/",
+    "install:hook": "node scripts/install-hook.mjs",
+    "check": "node --check hooks/PreToolUse.js && node --check mcp-server.js && node --check cline-plugin.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/cline-interceptor.js && node --check scripts/install-hook.mjs",
+    "verify": "npm run check && npm test",
+    "prepublishOnly": "npm run verify"
+  },
+  "files": [
+    "src/cli.js",
+    "src/jev-client.js",
+    "src/cline-interceptor.js",
+    "!src/main",
+    "hooks/",
+    "scripts/",
+    "skills/",
+    "mcp-server.js",
+    "cline-plugin.js",
+    "README.md",
+    ".clinerules"
+  ],
+  "keywords": ["cline", "jev", "typesafe", "opencode-zen", "choice", "mcp", "hook"],
+  "author": "donbee",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saahmadnejad/cline-option-scorer.git"
+  },
+  "homepage": "https://github.com/saahmadnejad/cline-option-scorer#readme",
+  "bugs": {
+    "url": "https://github.com/saahmadnejad/cline-option-scorer/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

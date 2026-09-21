@@ -1,0 +1,29 @@
+# deps + env
+node_modules/
+.env
+.env.local
+
+# secrets people paste in by accident
+*.key
+ov_secret_*
+
+# logs / local hook output
+*.log
+*.jsonl
+logs/
+
+# stale Maven output from the legacy Java impl (pom.xml + src/main/java are kept)
+target/
+*.class
+
+# editor + OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+.settings/
+.classpath
+.project
+
+# hook installs
+hooks/*.bak

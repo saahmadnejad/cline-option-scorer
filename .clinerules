@@ -1,0 +1,2 @@
+# Jev percentages for questions (cline-jev-percent)
+The `PreToolUse` hook appends Jev percentages to `ask_question`/`ask_followup_question` options automatically - do not fake or restate percentages yourself. If you want to know them BEFORE composing the question (or you are in a session without the hook), call `score_cline_options` (MCP or plugin tool) with state+question+options and use its `enrichedOptions` labels (e.g. `GitHub Actions (72.5%)`). Never invent percentages.

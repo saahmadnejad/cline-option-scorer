@@ -1,0 +1,119 @@
+name: Publish to npm
+
+# Release-driven publishing: publishing a GitHub Release is the ONLY trigger.
+#
+# Why this exact trigger, and nothing else:
+#   - npm's trusted-publisher validation matches the workflow FILE that runs
+#     `npm publish` (the `job_workflow_ref` claim). npm's docs warn that
+#     `workflow_call` / `workflow_dispatch` publishing can make that check
+#     compare a *different* workflow name and fail confusingly, so this file
+#     publishes only on `release: published`.
+#   - `published` fires for pre-releases too; the publish step below routes a
+#     prerelease version to the `next` dist-tag so it never becomes `latest`.
+on:
+  release:
+    types: [published]
+
+# `id-token: write` is what lets GitHub mint the OIDC token npm exchanges for a
+# short-lived publish credential. There is deliberately NO NPM_TOKEN secret.
+permissions:
+  contents: read
+  id-token: write
+
+# Never let two releases publish concurrently.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Trusted publishing only supports cloud-hosted runners (not self-hosted).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          # NOTE: no `registry-url` here on purpose. setup-node writes an
+          # `.npmrc` containing `_authToken=${NODE_AUTH_TOKEN}`, and npm only
+          # falls back to OIDC when NO token is present. A blank token still
+          # counts as present, so `registry-url` breaks trusted publishing.
+          # npm defaults to the public registry anyway.
+          package-manager-cache: false # never cache in release builds
+
+      - name: Use a current npm (trusted publishing needs >= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          node -e '
+            const MIN = "11.5.1";
+            const parse = (v) => String(v).split("-")[0].split(".").map(Number);
+            const got = parse(process.argv[1]);
+            const min = parse(MIN);
+            let old = false;
+            for (let i = 0; i < 3; i++) {
+              const g = got[i] ?? 0;
+              const m = min[i] ?? 0;
+              if (g > m) break; // newer segment: new enough no matter what follows
+              if (g < m) { old = true; break; }
+            }
+            if (old) {
+              console.error(`npm ${process.argv[1]} is too old for npm trusted publishing (need >= ${MIN})`);
+              process.exit(1);
+            }
+            console.log(`npm ${process.argv[1]} is new enough for trusted publishing`);
+          ' "$(npm --version)"
+
+      - run: npm ci
+
+      - name: Verify the release tag matches package.json
+        run: |
+          VERSION="$(npm pkg get version | tr -d '"')"
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::release tag '$GITHUB_REF_NAME' does not match package.json version '$VERSION'"
+            exit 1
+          fi
+
+      - run: npm run verify
+
+      - name: Assert the tarball ships what we expect
+        run: |
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const files = require("/tmp/pack.json")[0].files.map((f) => f.path);
+            const required = [
+              "hooks/PreToolUse.js",
+              "cline-plugin.js",
+              "mcp-server.js",
+              "src/cli.js",
+              "src/jev-client.js",
+              "scripts/install-hook.mjs",
+              "skills/jev-percentages/SKILL.md",
+              "README.md",
+            ];
+            const missing = required.filter((p) => !files.includes(p));
+            const leaked = files.filter((p) => p.startsWith("src/main") || p.startsWith("target/"));
+            if (missing.length) { console.error("missing from tarball:", missing); process.exit(1); }
+            if (leaked.length) { console.error("should not ship:", leaked); process.exit(1); }
+            console.log(`tarball ok: ${files.length} files`);
+          '
+
+      - name: Publish to npm
+        run: |
+          VERSION="$(npm pkg get version | tr -d '"')"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "pre-release $VERSION -> dist-tag next"
+            npm publish --provenance --access public --tag next
+          else
+            echo "stable $VERSION -> dist-tag latest"
+            npm publish --provenance --access public
+          fi
+        # `--provenance` is passed explicitly even though trusted publishing is
+        # documented to attach provenance automatically: in practice it is not
+        # always automatic, and the flag is harmless. `--access public` is also
+        # in publishConfig; it is repeated so the first publish of this scoped
+        # package cannot accidentally go out as restricted.
+        #
+        # Deliberately NO `env: NODE_AUTH_TOKEN:` block - see the setup-node note
+        # above. With no token in the environment, npm uses OIDC.
