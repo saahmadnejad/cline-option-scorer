@@ -95,7 +95,7 @@ jobs:
           node -e '
             const files = require("/tmp/pack.json")[0].files.map((f) => f.path);
             const required = [
-              "hooks/PreToolUse.js",
+              "hooks/PreToolUse.cjs",
               "cline-plugin.js",
               "mcp-server.js",
               "src/cli.js",

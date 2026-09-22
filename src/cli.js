@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 // Usage (installed: npm install -g @donbee/cline-option-scorer):
-//   cline-option-scorer --demo             # zen-free, no key
-//   cline-option-scorer --demo --provider zen --model jev-1.13   # needs OPENCODE_API_KEY
-//   cline-option-scorer --demo --provider typesafe              # needs TYPESAFE_API_KEY
 //   cline-option-scorer --state "..." --question "..." --option "A" --option "B"
+//   cline-option-scorer --cline-xml "<ask_followup_question>…"   # or --cline-file / stdin
 import { scoreOptions, printResult } from './jev-client.js';
 import { interceptClineAsk, parseClineAsk } from './cline-interceptor.js';
 import fs from 'node:fs';
@@ -17,10 +15,8 @@ function argAll(name) {
   process.argv.forEach((v, i) => { if (v === `--${name}` && process.argv[i + 1]) out.push(process.argv[i + 1]); });
   return out;
 }
-const has = (n) => process.argv.includes(`--${n}`);
-
 const provider = arg('provider', 'zen-free');
-if (arg('model', null)) process.env.JEV_MODEL = arg('model', null);
+const model = arg('model', null); // explicit override — never routed through the environment
 
 // Real Cline mode: --cline-xml "<ask_followup_question>..." or --cline-file path, or pipe via stdin
 let clineXml = arg('cline-xml');
@@ -33,7 +29,7 @@ if (!clineXml && !process.stdin.isTTY) {
 if (clineXml) {
   const stateArg = arg('state');
   try {
-    const r = await interceptClineAsk({ xml: clineXml, state: stateArg, provider });
+    const r = await interceptClineAsk({ xml: clineXml, state: stateArg, provider, model });
     printResult(r.question, r);
     console.log('\n--- enriched Cline XML (paste back) ---\n' + r.enrichedXml);
   } catch (e) {
@@ -47,10 +43,13 @@ let state = arg('state');
 let question = arg('question');
 let options = argAll('option');
 
-if (has('demo') || (!state && !question)) {
-  state = 'User is setting up CI/CD for a Java Maven project hosted on GitHub.';
-  question = 'Which CI/CD platform should we integrate?';
-  options = ['GitHub Actions', 'GitLab CI', 'Jenkins'];
+if (!state && !question) {
+  console.error(
+    'Usage: cline-option-scorer --state "..." --question "..." --option "A" --option "B" ' +
+      '[--provider zen-free|zen|typesafe] [--model jev-1.13]\n' +
+      '       cline-option-scorer --cline-xml "<ask_followup_question>…"  (or --cline-file, or pipe XML via stdin)'
+  );
+  process.exit(1);
 }
 
 if (!options.length) {
@@ -59,7 +58,7 @@ if (!options.length) {
 }
 
 try {
-  const result = await scoreOptions({ state, question, options, provider });
+  const result = await scoreOptions({ state, question, options, provider, model });
   printResult(question, result);
 } catch (e) {
   // offline / no key fallback: equal split so installer works on any system

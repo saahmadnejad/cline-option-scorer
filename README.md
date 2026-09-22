@@ -11,18 +11,19 @@ Which CI/CD platform should we integrate?
 ```
 
 ```bash
-npx @donbee/cline-option-scorer --demo     # try it, no install, no key
+npx @donbee/cline-option-scorer --question "Which CI/CD platform?" \
+  --option "GitHub Actions" --option "GitLab CI" --option "Jenkins"
 
 npm install -g @donbee/cline-option-scorer
-cline-option-scorer --demo                 # end-to-end scoring
-cline-option-scorer-install-hook           # -> ~/.cline/hooks/PreToolUse.js
+cline-option-scorer --state "..." --question "..." --option "A" --option "B"
+cline-option-scorer-install-hook           # -> ~/.cline/hooks/PreToolUse.cjs + jev-hook-lib.cjs
 ```
 
 Three independent surfaces, same scoring core (`src/jev-client.js`):
 
 | Surface | File | Use when |
 |---|---|---|
-| **PreToolUse hook** | `hooks/PreToolUse.js` | You want percentages even if the model never calls a tool (deterministic, automatic) |
+| **PreToolUse hook** | `hooks/PreToolUse.cjs` | You want percentages even if the model never calls a tool (deterministic, automatic) |
 | **Cline plugin** | `cline-plugin.js` | SDK / CLI / Kanban sessions (`score_cline_options` tool + `beforeTool` hook) |
 | **MCP server** | `mcp-server.js` | VSCode extension, where SDK plugins are unsupported |
 
@@ -32,8 +33,9 @@ exists.
 
 ## Setup
 
-Node >= 18, no runtime dependencies. `OPENCODE_API_KEY` is optional — without
-it the anonymous `jev-1.13-free` model is used.
+Node >= 18, no runtime dependencies, **no environment variables**. The defaults
+run anonymously on the free `jev-1.13-free` model; everything optional (provider,
+keys, timeout, log dir) lives in a `cline-jev.json` file — see Configuration.
 
 ```bash
 PKG="$(npm root -g)/@donbee/cline-option-scorer"
@@ -48,19 +50,52 @@ Verify the hook with `tail -n 5 ~/.cline/data/logs/jev-hook.jsonl`
 
 ## Configuration
 
-| Variable | Default | Purpose |
+All configuration lives in one JSON file — **no shell/environment variables are
+read, ever**. Create `cline-jev.json` in the first of these locations that
+exists (project root beats home):
+
+1. your project root — the nearest ancestor directory of the Cline workspace
+   containing `package.json`, `.git`, or `.cline`
+2. `~/.cline/cline-jev.json`
+3. `~/.config/cline-jev/cline-jev.json`
+
+```json
+{
+  "provider": "zen-free",
+  "model": "jev-1.13-free",
+  "baseUrl": "https://opencode.ai/zen/v1/systemone",
+  "opencodeApiKey": "…",
+  "typesafeApiKey": "…",
+  "timeoutMs": 10000,
+  "logDir": "/home/me/.cline/data/logs"
+}
+```
+
+| Key | Default | Purpose |
 |---|---|---|
-| `OPENCODE_API_KEY` / `TYPESAFE_API_KEY` | — | Paid (`jev-1.13`) / direct TypeSafe (`jev-1.13.0`) auth |
-| `JEV_BASE_URL` | `https://opencode.ai/zen/v1/systemone` | SystemOne endpoint |
-| `JEV_MODEL` | `jev-1.13-free` | `jev-1.13-free` \| `jev-1.13` \| `jev-1.13.0` |
-| `JEV_TIMEOUT_MS` | `10000` | Deadline per scoring call; the hook fails open after this |
+| `provider` | `zen-free` | `zen-free` \| `zen` \| `typesafe` |
+| `model` | provider default (`jev-1.13-free` / `jev-1.13` / `jev-1.13.0`) | Jev model id |
+| `baseUrl` | provider endpoint | SystemOne endpoint |
+| `opencodeApiKey` / `typesafeApiKey` | — | Paid (`jev-1.13`) / direct TypeSafe (`jev-1.13.0`) auth |
+| `timeoutMs` | `10000` | Deadline per scoring call; the hook fails open after this |
+| `logDir` | `~/.cline/data/logs` | Where the hook appends its `jev-hook.jsonl` audit log |
+
+Every key is optional — with no file at all you get the anonymous free model.
+Explicit CLI flags / tool arguments always win over the file.
+
+### Uninstall
+
+```bash
+rm ~/.cline/hooks/PreToolUse.cjs ~/.cline/hooks/jev-hook-lib.cjs
+rm -f ~/.cline/hooks/PreToolUse.js.bak ~/.cline/hooks/PreToolUse.js ~/.cline/hooks/jev-hook-lib.js   # older leftovers
+```
+
+Open a **new** Cline session afterwards. The MCP surface goes away by deleting
+its `jev-percent` entry from `~/.cline/mcp.json`.
 
 ## CLI
 
 ```bash
-node src/cli.js --demo                                        # zen-free, no key
-node src/cli.js --demo --provider zen --model jev-1.13        # needs OPENCODE_API_KEY
-node src/cli.js --demo --provider typesafe                    # needs TYPESAFE_API_KEY
 node src/cli.js --state "..." --question "Which CI?" --option "GitHub Actions" --option "GitLab CI"
 cat ask.xml | node src/cli.js                                 # enrich real Cline XML
 ```
@@ -72,7 +107,7 @@ calls. Develop with a chat model, score with Jev.
 
 ```bash
 npm run verify                       # syntax checks + 11 hermetic tests, no network
-npm run install:hook                 # -> ~/.cline/hooks/PreToolUse.js (mode 755, verified)
+npm run install:hook                 # -> ~/.cline/hooks/{PreToolUse.cjs, jev-hook-lib.cjs} (mode 755, verified)
 cline plugin install /path/to/repo   # plugin tool + beforeTool hook (re-run after edits!)
 ```
 
