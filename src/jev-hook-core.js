@@ -63,54 +63,203 @@ const trunc = (s, n) => {
   return t.length <= n ? t : `${t.slice(0, n - 1)}…`;
 };
 
-// Read the audit trail and pair past questions with the answers the user
-// actually gave (PostToolUse logs `answer` events). Returns "" when history is
-// disabled, missing, or unparseable — enrichment must never break scoring.
-function buildHistory(cfg) {
-  if (cfg.includeHistory === false) return "";
+// Which conversation does this hook call belong to? Every hook call is a FRESH
+// process and Cline is not guaranteed to send the same id fields to PreToolUse
+// and PostToolUse — so we resolve BOTH candidates per call:
+//   session: an explicit id from the event (stable across restarts/shell wrappers)
+//   proc:    the parent process id = the Cline session that spawned us
+//             (always consistent between the two hooks of one session)
+// Rows store both, and a session-scoped read matches EITHER, so pairing survives
+// a payload that carries an id to one hook and not the other.
+function sessionInfo(event) {
+  const e = event || {};
+  const candidates = [
+    e.sessionId, e.session_id, e.session, e.taskId, e.task_id, e.conversationId, e.conversation_id,
+    e.agent_id, e.agentId, e.agent?.id,
+    e.preToolUse?.sessionId, e.postToolUse?.sessionId,
+    e.tool_call?.sessionId, e.tool_call?.taskId,
+  ];
+  let session = null;
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) {
+      session = c.trim().slice(0, 64);
+      break;
+    }
+  }
+  return { session, proc: `ppid:${process.ppid}` };
+}
+
+const workspaceRoot = (event) => {
+  const roots = Array.isArray(event?.workspaceRoots) ? event.workspaceRoots : [];
+  const root = event?.workspaceInfo?.rootPath || roots[0] || "";
+  return typeof root === "string" && root ? root : null;
+};
+
+/* ---------- SQLite store (decision history) ---------- */
+
+// `false` caches "no SQLite on this runtime" so we probe only once per process.
+let dbCache = null;
+
+function sqlitePath(cfg) {
+  const os = __req("node:os");
+  const dir = cfg.logDir || `${os.homedir()}/.cline/data/logs`;
+  return cfg.dbPath || `${dir}/jev-hook.db`;
+}
+
+// One-time import of the pre-SQLite JSONL trail, so history recorded before the
+// upgrade survives. Imported rows carry session/workspace NULL (= legacy) and
+// stay visible to every scope.
+function backfill(d, jsonlPath) {
   try {
+    if (d.prepare("SELECT COUNT(*) AS n FROM events").get().n > 0) return;
     const fs = __req("node:fs");
-    const os = __req("node:os");
-    const logDir = cfg.logDir || `${os.homedir()}/.cline/data/logs`;
-    const raw = fs.readFileSync(`${logDir}/jev-hook.jsonl`, "utf8");
-    const entries = [];
-    for (const line of raw.split("\n").slice(-400)) {
+    const raw = fs.readFileSync(jsonlPath, "utf8");
+    const insert = d.prepare(
+      "INSERT INTO events (ts, session, workspace, event, tool, question, answer, options) VALUES (?,?,?,?,?,?,?,?)"
+    );
+    for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
-        entries.push(JSON.parse(line));
+        const e = JSON.parse(line);
+        if (!e?.event) continue;
+        insert.run(
+          e.ts ?? null, e.session ?? null, e.workspace ?? null, String(e.event),
+          e.tool ?? null, e.question ?? null, e.answer ?? null,
+          Array.isArray(e.options) ? JSON.stringify(e.options) : null
+        );
       } catch {}
     }
-    // Pair each `intercept` with the next `answer` for the same question.
-    const pairs = [];
-    let lastQ = null;
-    for (const e of entries) {
-      if (e?.event === "intercept" && typeof e.question === "string") {
-        lastQ = e;
-      } else if (e?.event === "answer" && typeof e.question === "string" && e.answer && lastQ?.question === e.question) {
-        pairs.push([lastQ.question, e.answer]);
-        lastQ = null;
-      }
-    }
-    const turns = Math.max(0, Number(cfg.historyTurns) | 0);
-    if (turns === 0) return ""; // NB: `slice(-0)` would return the WHOLE array
-    let budget = Math.max(0, (cfg.maxStateChars ?? 2000) - 400); // keep room for question + workspace
-    const lines = [];
-    for (const [q, a] of pairs.slice(-turns).reverse()) {
-      const line = `Q: ${trunc(q, 160)} → chose: ${trunc(a, 80)}`;
-      if (line.length > budget) break;
-      lines.push(line);
-      budget -= line.length + 1;
-    }
-    return lines.length ? `\nRecent decisions in this session:\n${lines.join("\n")}` : "";
   } catch {
-    return ""; // no trail yet / unreadable: score without history
+    /* no trail to import */
   }
+}
+
+// Open (and migrate) the store. Returns false when node:sqlite is unavailable
+// (Node < 22.5, or Node 22.x without --experimental-sqlite): scoring still
+// works, it just runs without decision history.
+function openDb(cfg) {
+  if (dbCache !== null) return dbCache;
+  try {
+    const { DatabaseSync } = __req("node:sqlite");
+    const fs = __req("node:fs");
+    const path = __req("node:path");
+    const file = sqlitePath(cfg);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const d = new DatabaseSync(file);
+    // WAL + busy_timeout is what makes concurrent Cline sessions safe: writers
+    // queue instead of failing with SQLITE_BUSY.
+    d.exec("PRAGMA journal_mode = WAL");
+    d.exec("PRAGMA busy_timeout = 3000");
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT,
+        session TEXT,
+        proc TEXT,
+        workspace TEXT,
+        event TEXT NOT NULL,
+        tool TEXT,
+        question TEXT,
+        answer TEXT,
+        options TEXT
+      )`);
+    // Migration for stores created before the `proc` column existed.
+    try {
+      d.exec("ALTER TABLE events ADD COLUMN proc TEXT");
+    } catch {
+      /* column already there */
+    }
+    d.exec("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session, id)");
+    d.exec("CREATE INDEX IF NOT EXISTS idx_events_proc ON events(proc, id)");
+    d.exec("CREATE INDEX IF NOT EXISTS idx_events_workspace ON events(workspace, id)");
+    const os = __req("node:os");
+    backfill(d, `${cfg.logDir || `${os.homedir()}/.cline/data/logs`}/jev-hook.jsonl`);
+    dbCache = d;
+    return d;
+  } catch {
+    dbCache = false;
+    return false;
+  }
+}
+
+function insertEvent(d, entry) {
+  try {
+    d.prepare(
+      "INSERT INTO events (ts, session, proc, workspace, event, tool, question, answer, options) VALUES (?,?,?,?,?,?,?,?,?)"
+    ).run(
+      entry.ts || new Date().toISOString(),
+      entry.session ?? null,
+      entry.proc ?? null,
+      entry.workspace ?? null,
+      String(entry.event),
+      entry.tool ?? null,
+      entry.question ?? null,
+      entry.answer ?? null,
+      Array.isArray(entry.options) ? JSON.stringify(entry.options) : null
+    );
+  } catch {
+    /* history is best-effort; never break a question over it */
+  }
+}
+
+// Scoped history: "session" (default) keeps concurrent Cline sessions
+// isolated, "workspace" shares decisions across sessions in the same project,
+// "global" shares everything. Legacy rows (imported from JSONL, session NULL)
+// are visible to every scope.
+function buildHistory(cfg, ident, workspace) {
+  if (cfg.includeHistory === false) return "";
+  const turns = Math.max(0, Number(cfg.historyTurns) | 0);
+  if (turns === 0) return ""; // NB: `slice(-0)` would return the WHOLE array
+  const d = openDb(cfg);
+  if (!d) return "";
+  const scope = cfg.historyScope || "session";
+  let sql = "SELECT event, question, answer FROM events WHERE event IN ('intercept','answer')";
+  const params = [];
+  if (scope === "session") {
+    // Isolation + pairing in one rule: an explicit id matches only the same id;
+    // id-less rows pair through the parent process (a hook payload that carries
+    // an id to PreToolUse but not PostToolUse still pairs); rows imported from
+    // the pre-SQLite JSONL trail (no id, no proc) stay visible to everyone.
+    sql += " AND ((session IS NOT NULL AND session = ?) OR (session IS NULL AND proc = ?) OR (session IS NULL AND proc IS NULL))";
+    params.push(ident?.session ?? null, ident?.proc ?? null);
+  } else if (scope === "workspace") {
+    sql += " AND (workspace = ? OR workspace IS NULL)";
+    params.push(workspace ?? null);
+  }
+  sql += " ORDER BY id DESC LIMIT 200";
+  let rows;
+  try {
+    rows = d.prepare(sql).all(...params);
+  } catch {
+    return "";
+  }
+  // Oldest -> newest, then pair each `intercept` with the next `answer` for the
+  // same question (both already scoped to this session/workspace).
+  const pairs = [];
+  let lastQ = null;
+  for (const e of rows.reverse()) {
+    if (e.event === "intercept" && typeof e.question === "string") {
+      lastQ = e;
+    } else if (e.event === "answer" && typeof e.question === "string" && e.answer && lastQ?.question === e.question) {
+      pairs.push([lastQ.question, e.answer]);
+      lastQ = null;
+    }
+  }
+  let budget = Math.max(0, (cfg.maxStateChars ?? 2000) - 400); // keep room for question + workspace
+  const lines = [];
+  for (const [q, a] of pairs.slice(-turns).reverse()) {
+    const line = `Q: ${trunc(q, 160)} → chose: ${trunc(a, 80)}`;
+    if (line.length > budget) break;
+    lines.push(line);
+    budget -= line.length + 1;
+  }
+  return lines.length ? `\nRecent decisions in this session:\n${lines.join("\n")}` : "";
 }
 
 // The full `state` payload: question + workspace + (optional) decision history.
 function buildState(event, question) {
   const cfg = resolveConfig();
-  let state = contextState(event, question) + buildHistory(cfg);
+  let state = contextState(event, question) + buildHistory(cfg, sessionInfo(event), workspaceRoot(event));
   const max = cfg.maxStateChars ?? 2000;
   if (state.length > max) state = state.slice(0, max);
   return state;
@@ -153,16 +302,21 @@ async function log(entry, deps) {
       const fs = deps?.fs || __req("node:fs");
       const os = __req("node:os");
       // The audit dir comes from cline-jev.json (`logDir`), never from the env.
-      const cfg = resolveConfig();
+      const cfg = deps?.cfg || resolveConfig();
       const dir = deps?.logDir || cfg.logDir || `${os.homedir()}/.cline/data/logs`;
       // A fresh logDir does not exist yet; without this every write fails
       // silently and the decision history would never populate.
       try {
         fs.mkdirSync(dir, { recursive: true });
       } catch {}
-      logSink = { fs, path: `${dir}/jev-hook.jsonl` };
+      logSink = { fs, cfg, path: `${dir}/jev-hook.jsonl` };
     }
-    logSink.fs.appendFileSync(logSink.path, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
+    const record = { ts: new Date().toISOString(), ...entry };
+    // 1) JSONL: the human-readable audit trail (`tail` it to debug).
+    logSink.fs.appendFileSync(logSink.path, JSON.stringify(record) + "\n");
+    // 2) SQLite: the queryable store behind decision history, scoped per session.
+    const d = openDb(logSink.cfg);
+    if (d) insertEvent(d, record);
   } catch {
     /* logging is observational only */
   }
@@ -183,6 +337,9 @@ async function main() {
     console.log(JSON.stringify({})); // not a question: ignore
     return;
   }
+  // Session identity + workspace travel with every row so history can be
+  // scoped later (concurrent Cline sessions must not see each other's answers).
+  const ctx = { ...sessionInfo(event), workspace: workspaceRoot(event) };
   const input = readInput(event);
   const question = input.question;
   const options = input.options;
@@ -200,15 +357,15 @@ async function main() {
     console.log(JSON.stringify({})); // idempotent: never double-tag
     return;
   }
-  await log({ event: "intercept", tool: toolName, source: "hook", question, options });
+  await log({ event: "intercept", ...ctx, tool: toolName, source: "hook", question, options });
   try {
     const probs = await score(buildState(event, question), question, options);
     const enriched = options.map((o) => withPct(o, probs[o]));
-    await log({ event: "enriched", source: "hook", question, enriched });
+    await log({ event: "enriched", ...ctx, source: "hook", question, enriched });
     console.log(JSON.stringify({ cancel: false, overrideInput: { ...input, question, options: enriched } }));
   } catch (e) {
     console.error(`[jev-percent] scoring failed, allowing as-is: ${e?.message || e}`);
-    await log({ event: "fail_open", source: "hook", error: String(e?.message || e) });
+    await log({ event: "fail_open", ...ctx, source: "hook", error: String(e?.message || e) });
     console.log(JSON.stringify({}));
   }
 }
@@ -267,12 +424,14 @@ async function postMain() {
   const input = readInput(event);
   const question = typeof input?.question === "string" ? input.question : "";
   const answer = extractAnswer(event);
+  const ctx = { ...sessionInfo(event), workspace: workspaceRoot(event) };
   if (answer) {
-    await log({ event: "answer", source: "hook", tool: toolName, question, answer });
+    await log({ event: "answer", ...ctx, source: "hook", tool: toolName, question, answer });
   } else {
     // Self-debugging: if the shape ever changes, the trail tells us where to look.
     await log({
       event: "answer_unclear",
+      ...ctx,
       source: "hook",
       tool: toolName,
       question,

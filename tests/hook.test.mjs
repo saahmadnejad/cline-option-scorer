@@ -13,9 +13,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -29,6 +30,18 @@ execFileSync(process.execPath, [join(REPO, "scripts", "install-hook.mjs"), "--di
 
 // Every hook run writes its audit log here (via `logDir` in the test config).
 const LOG_DIR = mkdtempSync(join(tmpdir(), "jev-hook-test-"));
+
+// Decision history needs node:sqlite (Node >= 22.5; unflagged from 23.4), so
+// probe the runtime instead of guessing from the version string.
+const hasSqlite = (() => {
+  try {
+    createRequire(import.meta.url)("node:sqlite");
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const sqliteSkip = hasSqlite ? false : "node:sqlite unavailable on this Node (needs >= 22.5, unflagged from 23.4)";
 
 // Local stand-in for https://opencode.ai/zen/v1/systemone
 async function startStub(handler) {
@@ -325,7 +338,7 @@ const postPayload = (input, response) => ({
   postToolUse: { toolName: "ask_question", response },
 });
 
-test("PostToolUse captures the chosen answer and the next question's state includes it", async () => {
+test("PostToolUse captures the chosen answer and the next question's state includes it", { skip: sqliteSkip }, async () => {
   // 0) the question is actually asked first (PreToolUse logs the intercept)
   let stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({ Postgres: 0.7, SQLite: 0.3 })(body))));
   try {
@@ -368,7 +381,7 @@ test("PostToolUse is observe-only: unknown payload shapes log answer_unclear, ne
   assert.ok(Array.isArray(entry.toolCallKeys), "key names recorded for debugging");
 });
 
-test("history knobs: includeHistory false and historyTurns 0 both keep state clean", async () => {
+test("history knobs: includeHistory false and historyTurns 0 both keep state clean", { skip: sqliteSkip }, async () => {
   let seen = null;
   const stub = await startStub((body, res) => {
     seen = body;
@@ -403,6 +416,88 @@ test("maxStateChars caps the whole state payload, question included", async () =
       maxStateChars: 500,
     });
     assert.ok(seen.state.length <= 500, `state was ${seen.state.length} chars, cap is 500`);
+  } finally {
+    await stub.close();
+  }
+});
+
+// ---------- Multi-session isolation (SQLite store) ----------
+
+const sessionPayload = (sessionId, input, toolName = "ask_question") => ({
+  ...realPayload(input, toolName),
+  sessionId,
+});
+
+test("concurrent sessions are isolated: one session never inherits another's decision", { skip: sqliteSkip }, async () => {
+  let seen = null;
+  const stub = await startStub((body, res) => {
+    seen = body;
+    res.end(JSON.stringify(jevAnswer({ A: 1, B: 0 })(body)));
+  });
+  const cfg = { baseUrl: stub.url };
+  try {
+    // session 1 asks, then the user answers
+    await runHook(sessionPayload("sess-1", { question: "Session 1 choice?", options: ["A", "B"] }), cfg);
+    await runPostHook(
+      { ...postPayload({ question: "Session 1 choice?", options: ["A", "B"] }, { answer: "A" }), sessionId: "sess-1" },
+      cfg
+    );
+
+    // session 2 asks a question — must not see session 1's decision
+    await runHook(sessionPayload("sess-2", { question: "Session 2 question?", options: ["A", "B"] }), cfg);
+    assert.ok(!seen.state.includes("Session 1 choice?"), `session 2 inherited session 1: ${seen.state}`);
+
+    // session 1 asks a follow-up — its own decision is present
+    await runHook(sessionPayload("sess-1", { question: "Session 1 follow-up?", options: ["A", "B"] }), cfg);
+    assert.match(seen.state, /Q: Session 1 choice\? → chose: A/);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("historyScope: workspace shares decisions between sessions of one project", { skip: sqliteSkip }, async () => {
+  let seen = null;
+  const stub = await startStub((body, res) => {
+    seen = body;
+    res.end(JSON.stringify(jevAnswer({ A: 1, B: 0 })(body)));
+  });
+  const cfg = { baseUrl: stub.url, historyScope: "workspace" };
+  try {
+    await runHook(sessionPayload("ws-sess-1", { question: "Workspace choice?", options: ["A", "B"] }), cfg);
+    await runPostHook(
+      { ...postPayload({ question: "Workspace choice?", options: ["A", "B"] }, { answer: "B" }), sessionId: "ws-sess-1" },
+      cfg
+    );
+    await runHook(sessionPayload("ws-sess-2", { question: "Another session's question?", options: ["A", "B"] }), cfg);
+    assert.match(seen.state, /Q: Workspace choice\? → chose: B/);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("a pre-SQLite JSONL trail is imported once, so existing history survives", { skip: sqliteSkip }, async () => {
+  // Seed a legacy trail in a logDir whose SQLite store does not exist yet.
+  const legacyDir = join(LOG_DIR, `legacy-${Date.now()}`, "logs");
+  mkdirSync(legacyDir, { recursive: true });
+  writeFileSync(
+    join(legacyDir, "jev-hook.jsonl"),
+    [
+      JSON.stringify({ ts: new Date().toISOString(), event: "intercept", question: "Legacy question?", options: ["A", "B"] }),
+      JSON.stringify({ ts: new Date().toISOString(), event: "answer", question: "Legacy question?", answer: "B" }),
+    ].join("\n") + "\n"
+  );
+
+  let seen = null;
+  const stub = await startStub((body, res) => {
+    seen = body;
+    res.end(JSON.stringify(jevAnswer({ A: 1, B: 0 })(body)));
+  });
+  try {
+    await runHook(realPayload({ question: "After the upgrade?", options: ["A", "B"] }), {
+      baseUrl: stub.url,
+      logDir: legacyDir,
+    });
+    assert.match(seen.state, /Q: Legacy question\? → chose: B/);
   } finally {
     await stub.close();
   }

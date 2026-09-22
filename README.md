@@ -33,9 +33,12 @@ exists.
 
 ## Setup
 
-Node >= 18, no runtime dependencies, **no environment variables**. The defaults
+Node >= 22.5, no runtime dependencies, **no environment variables**. The defaults
 run anonymously on the free `jev-1.13-free` model; everything optional (provider,
-keys, timeout, log dir) lives in a `cline-jev.json` file — see Configuration.
+keys, timeout, history, log dir) lives in a `cline-jev.json` file — see
+Configuration. Per-session decision history uses the built-in `node:sqlite`
+store (unflagged from Node 23.4; on older runtimes scoring still works, just
+without history).
 
 ```bash
 PKG="$(npm root -g)/@donbee/cline-option-scorer"
@@ -48,6 +51,20 @@ Open a **new** Cline session afterwards — hooks and plugins load at startup.
 Verify the hooks with `tail -n 5 ~/.cline/data/logs/jev-hook.jsonl`
 (`intercept` / `enriched` / `skip` / `fail_open` from PreToolUse, plus `answer`
 and `answer_unclear` from PostToolUse).
+
+### Multiple concurrent sessions
+
+Decisions are stored in `<logDir>/jev-hook.db` (SQLite, WAL mode, `busy_timeout`
+set), so several Cline sessions can write at once without locking each other
+out. Each row is tagged with the session (an id from the hook payload, else the
+parent process) and the workspace, and `historyScope` decides what feeds the
+next question:
+
+```sql
+-- inspect the store
+sqlite3 ~/.cline/data/logs/jev-hook.db \
+  "SELECT ts, session, event, question, answer FROM events ORDER BY id DESC LIMIT 10;"
+```
 
 ## Configuration
 
@@ -83,6 +100,8 @@ exists (project root beats home):
 | `includeHistory` | `true` | Enrich `state` with recent question→answer pairs captured by the PostToolUse hook. **Note:** this sends snippets of your Cline conversation to the Jev API — set `false` to keep questions only |
 | `historyTurns` | `3` | How many past decisions to include |
 | `maxStateChars` | `2000` | Hard cap for the whole `state` payload |
+| `historyScope` | `session` | Which decisions count as context: `session` (isolates concurrent Cline sessions), `workspace` (shares within a project), `global` (shares everything) |
+| `dbPath` | `<logDir>/jev-hook.db` | Where the SQLite decision store lives |
 
 Every key is optional — with no file at all you get the anonymous free model.
 Explicit CLI flags / tool arguments always win over the file.
@@ -97,6 +116,7 @@ Explicit CLI flags / tool arguments always win over the file.
 ```bash
 rm ~/.cline/hooks/PreToolUse.cjs ~/.cline/hooks/PostToolUse.cjs ~/.cline/hooks/jev-hook-lib.cjs
 rm -f ~/.cline/hooks/PreToolUse.js.bak ~/.cline/hooks/PreToolUse.js ~/.cline/hooks/jev-hook-lib.js   # older leftovers
+rm -f ~/.cline/data/logs/jev-hook.db*    # decision history (omit to keep it)
 ```
 
 Open a **new** Cline session afterwards. The MCP surface goes away by deleting

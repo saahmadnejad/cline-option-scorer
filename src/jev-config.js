@@ -36,9 +36,10 @@ export const DEFAULTS = Object.freeze({
   model: null, // null = provider default (jev-1.13-free | jev-1.13 | jev-1.13.0)
   baseUrl: null, // null = provider default endpoint
   timeoutMs: 10000,
-  includeHistory: true, // PreToolUse enriches state with recent Q→A pairs from the audit trail
+  includeHistory: true, // PreToolUse enriches state with recent Q→A pairs from the SQLite store
   historyTurns: 3, // how many past decision pairs to include
   maxStateChars: 2000, // hard cap for the whole state payload sent to Jev
+  historyScope: "session", // "session" | "workspace" | "global"
 });
 
 const FILE_NAME = "cline-jev.json";
@@ -134,6 +135,11 @@ export function resolveConfig(overrides = {}, cwd) {
     includeHistory: o.includeHistory ?? file.includeHistory ?? DEFAULTS.includeHistory,
     historyTurns: int(o.historyTurns ?? file.historyTurns, DEFAULTS.historyTurns),
     maxStateChars: num(o.maxStateChars ?? file.maxStateChars, DEFAULTS.maxStateChars),
+    // Which decisions count as context. "session" keeps concurrent Cline
+    // sessions isolated; "workspace" shares within a project; "global" shares all.
+    historyScope: o.historyScope ?? file.historyScope ?? DEFAULTS.historyScope,
+    // SQLite store (decision history). Default: <logDir>/jev-hook.db
+    dbPath: o.dbPath ?? file.dbPath ?? null,
     _source: path, // which file contributed, or null — useful in --help / logs
   };
 }
