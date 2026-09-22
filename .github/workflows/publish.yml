@@ -93,7 +93,11 @@ jobs:
         run: |
           npm pack --dry-run --json > /tmp/pack.json
           node -e '
-            const files = require("/tmp/pack.json")[0].files.map((f) => f.path);
+            // npm <= 11 emits an ARRAY of pack entries; npm 12 keys them by
+            // package name. Support both so the runner npm version is irrelevant.
+            const data = require("/tmp/pack.json");
+            const entry = Array.isArray(data) ? data[0] : data[Object.keys(data)[0]];
+            const files = entry.files.map((f) => f.path);
             const required = [
               "hooks/PreToolUse.cjs",
               "cline-plugin.js",
