@@ -83,6 +83,11 @@ exists (project root beats home):
 Every key is optional — with no file at all you get the anonymous free model.
 Explicit CLI flags / tool arguments always win over the file.
 
+> **Don't have your OpenCode key handy?** If you use the `opencode` CLI, the
+> same key it stores for you is in `~/.local/share/opencode/auth.json` (the
+> `opencode` entry's `key` field). Copy it into `cline-jev.json` and keep the
+> file private: `chmod 600 ~/.cline/cline-jev.json`.
+
 ### Uninstall
 
 ```bash
