@@ -32,7 +32,7 @@
   },
   "scripts": {
     "start": "node src/cli.js",
-    "test": "node --test tests/",
+    "test": "node --test tests/*.mjs",
     "install:hook": "node scripts/install-hook.mjs",
     "check": "node --check hooks/PreToolUse.cjs && node --check mcp-server.js && node --check cline-plugin.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/cline-interceptor.js && node --check scripts/install-hook.mjs",
     "verify": "npm run check && npm test",
