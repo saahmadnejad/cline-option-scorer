@@ -102,31 +102,3 @@ cat ask.xml | node src/cli.js                                 # enrich real Clin
 
 `jev-1.13*` are `decision` models — no chat, no tool calls, only SystemOne
 calls. Develop with a chat model, score with Jev.
-
-## Developing
-
-```bash
-npm run verify                       # syntax checks + 11 hermetic tests, no network
-npm run install:hook                 # -> ~/.cline/hooks/{PreToolUse.cjs, jev-hook-lib.cjs} (mode 755, verified)
-cline plugin install /path/to/repo   # plugin tool + beforeTool hook (re-run after edits!)
-```
-
-## Publishing
-
-Creating a **GitHub Release** is the only way this package reaches npm.
-Publishing a release runs `.github/workflows/publish.yml`, which verifies and
-publishes via **npm trusted publishing (OIDC)** — no `NPM_TOKEN` secret.
-The tag must match `package.json` (stable → `latest`, prerelease → `next`).
-
-```bash
-npm version 0.1.1 --no-git-tag-version   # bumps package.json + package-lock.json
-git commit -am "chore: release v0.1.1" && git push
-gh release create v0.1.1 --generate-notes
-```
-
-One-time bootstrap: npm only lets you configure a trusted publisher on a
-package that already exists ([npm/cli#8544](https://github.com/npm/cli/issues/8544)),
-so the **first version must be published by hand** (`npm login && npm publish`),
-then register repo `saahmadnejad/cline-option-scorer` + workflow `Publish to npm`
-as trusted publisher. Re-releasing an already-published version is safe — the
-workflow verifies and skips the publish instead of failing.
