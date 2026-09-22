@@ -5,18 +5,30 @@
   "type": "module",
   "main": "src/jev-client.js",
   "bin": {
-    "cline-option-scorer": "./src/cli.js",
-    "cline-jev-mcp": "./mcp-server.js",
-    "cline-option-scorer-install-hook": "./scripts/install-hook.mjs"
+    "cline-option-scorer": "src/cli.js",
+    "cline-jev-mcp": "mcp-server.js",
+    "cline-option-scorer-install-hook": "scripts/install-hook.mjs"
   },
   "cline": {
-    "plugins": [{ "paths": ["./cline-plugin.js"], "capabilities": ["tools", "hooks"] }]
+    "plugins": [
+      {
+        "paths": [
+          "./cline-plugin.js"
+        ],
+        "capabilities": [
+          "tools",
+          "hooks"
+        ]
+      }
+    ]
   },
   "peerDependencies": {
     "@cline/sdk": "*"
   },
   "peerDependenciesMeta": {
-    "@cline/sdk": { "optional": true }
+    "@cline/sdk": {
+      "optional": true
+    }
   },
   "scripts": {
     "start": "node src/cli.js",
@@ -36,7 +48,15 @@
     "README.md",
     ".clinerules"
   ],
-  "keywords": ["cline", "jev", "typesafe", "opencode-zen", "choice", "mcp", "hook"],
+  "keywords": [
+    "cline",
+    "jev",
+    "typesafe",
+    "opencode-zen",
+    "choice",
+    "mcp",
+    "hook"
+  ],
   "author": "donbee",
   "license": "MIT",
   "repository": {
