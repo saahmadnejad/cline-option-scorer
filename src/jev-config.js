@@ -36,6 +36,9 @@ export const DEFAULTS = Object.freeze({
   model: null, // null = provider default (jev-1.13-free | jev-1.13 | jev-1.13.0)
   baseUrl: null, // null = provider default endpoint
   timeoutMs: 10000,
+  includeHistory: true, // PreToolUse enriches state with recent Q→A pairs from the audit trail
+  historyTurns: 3, // how many past decision pairs to include
+  maxStateChars: 2000, // hard cap for the whole state payload sent to Jev
 });
 
 const FILE_NAME = "cline-jev.json";
@@ -111,6 +114,11 @@ export function resolveConfig(overrides = {}, cwd) {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : fb;
   };
+  const int = (v, fb) => {
+    // like num(), but allows 0 (historyTurns: 0 must disable history, not fall back)
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 0 ? n : fb;
+  };
   return {
     provider: o.provider ?? file.provider ?? DEFAULTS.provider,
     model: o.model ?? file.model ?? DEFAULTS.model,
@@ -122,6 +130,10 @@ export function resolveConfig(overrides = {}, cwd) {
     timeoutMs: num(o.timeoutMs ?? file.timeoutMs, DEFAULTS.timeoutMs),
     // Where the hook appends its audit log (default: <home>/.cline/data/logs).
     logDir: o.logDir ?? file.logDir ?? null,
+    // Context enrichment: how much conversation history goes into `state`.
+    includeHistory: o.includeHistory ?? file.includeHistory ?? DEFAULTS.includeHistory,
+    historyTurns: int(o.historyTurns ?? file.historyTurns, DEFAULTS.historyTurns),
+    maxStateChars: num(o.maxStateChars ?? file.maxStateChars, DEFAULTS.maxStateChars),
     _source: path, // which file contributed, or null — useful in --help / logs
   };
 }

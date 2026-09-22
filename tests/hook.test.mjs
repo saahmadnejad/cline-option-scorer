@@ -286,3 +286,124 @@ test("writes an audit trail to the configured logDir", async () => {
     await stub.close();
   }
 });
+
+test("creates the audit log directory when it does not exist yet", async () => {
+  const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({ A: 1, B: 0 })(body))));
+  const freshDir = join(LOG_DIR, `fresh-${Date.now()}`, "logs"); // does not exist yet
+  try {
+    await runHook(realPayload({ question: "Fresh log dir?", options: ["A", "B"] }), {
+      baseUrl: stub.url,
+      logDir: freshDir,
+    });
+    const lines = readFileSync(join(freshDir, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.ok(lines.some((l) => l.event === "intercept" && l.question === "Fresh log dir?"));
+  } finally {
+    await stub.close();
+  }
+});
+
+// ---------- PostToolUse: answer capture → history-enriched state ----------
+
+// Runs the PostToolUse hook exactly like Cline does.
+function runPostHook(payload, cfg = {}) {
+  const dir = makeProjectDir(cfg);
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [join(REPO, "hooks", "PostToolUse.cjs")], {
+      cwd: dir,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.on("close", (code) => resolve({ code, out: out.trim() }));
+    child.stdin.end(typeof payload === "string" ? payload : JSON.stringify(payload));
+  });
+}
+
+const postPayload = (input, response) => ({
+  hookName: "tool_call",
+  tool_call: { id: "call-2", name: "ask_question", input, response },
+  postToolUse: { toolName: "ask_question", response },
+});
+
+test("PostToolUse captures the chosen answer and the next question's state includes it", async () => {
+  // 0) the question is actually asked first (PreToolUse logs the intercept)
+  let stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({ Postgres: 0.7, SQLite: 0.3 })(body))));
+  try {
+    await runHook(realPayload({ question: "Pick a DB", options: ["Postgres", "SQLite"] }), { baseUrl: stub.url });
+  } finally {
+    await stub.close();
+  }
+
+  // 1) the post hook records the decision
+  const post = await runPostHook(
+    postPayload({ question: "Pick a DB", options: ["Postgres", "SQLite"] }, { answer: "Postgres" })
+  );
+  assert.equal(post.code, 0);
+  assert.deepEqual(JSON.parse(post.out || "{}"), {});
+  const lines = readFileSync(join(LOG_DIR, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(lines.some((l) => l.event === "answer" && l.question === "Pick a DB" && l.answer === "Postgres"));
+
+  // 2) the next question scores with that decision in its state
+  let seen = null;
+  stub = await startStub((body, res) => {
+    seen = body;
+    res.end(JSON.stringify(jevAnswer({ A: 0.6, B: 0.4 })(body)));
+  });
+  try {
+    await runHook(realPayload({ question: "Pick a framework", options: ["A", "B"] }), { baseUrl: stub.url });
+    assert.match(seen.state, /Recent decisions in this session:/);
+    assert.match(seen.state, /Q: Pick a DB → chose: Postgres/);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("PostToolUse is observe-only: unknown payload shapes log answer_unclear, never crash", async () => {
+  const post = await runPostHook(postPayload({ question: "Odd shape", options: ["A", "B"] }, { weird: { nested: [1, 2] } }));
+  assert.equal(post.code, 0);
+  assert.deepEqual(JSON.parse(post.out || "{}"), {});
+  const lines = readFileSync(join(LOG_DIR, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const entry = lines.find((l) => l.event === "answer_unclear" && l.question === "Odd shape");
+  assert.ok(entry, "answer_unclear entry written");
+  assert.ok(Array.isArray(entry.toolCallKeys), "key names recorded for debugging");
+});
+
+test("history knobs: includeHistory false and historyTurns 0 both keep state clean", async () => {
+  let seen = null;
+  const stub = await startStub((body, res) => {
+    seen = body;
+    res.end(JSON.stringify(jevAnswer({ A: 1, B: 0 })(body)));
+  });
+  try {
+    await runHook(realPayload({ question: "No history please", options: ["A", "B"] }), {
+      baseUrl: stub.url,
+      includeHistory: false,
+    });
+    assert.ok(!seen.state.includes("Recent decisions"));
+
+    await runHook(realPayload({ question: "Zero turns", options: ["A", "B"] }), {
+      baseUrl: stub.url,
+      historyTurns: 0,
+    });
+    assert.ok(!seen.state.includes("Recent decisions"));
+  } finally {
+    await stub.close();
+  }
+});
+
+test("maxStateChars caps the whole state payload, question included", async () => {
+  let seen = null;
+  const stub = await startStub((body, res) => {
+    seen = body;
+    res.end(JSON.stringify(jevAnswer({ A: 1, B: 0 })(body)));
+  });
+  try {
+    await runHook(realPayload({ question: "x".repeat(3000), options: ["A", "B"] }), {
+      baseUrl: stub.url,
+      maxStateChars: 500,
+    });
+    assert.ok(seen.state.length <= 500, `state was ${seen.state.length} chars, cap is 500`);
+  } finally {
+    await stub.close();
+  }
+});

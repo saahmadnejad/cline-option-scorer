@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO = join(here, "..");
 const HOOK_ENTRY = join(REPO, "hooks", "PreToolUse.cjs");
+const POST_ENTRY = join(REPO, "hooks", "PostToolUse.cjs");
 // .cjs on purpose: inside a "type": "module" repo a .js lib would be loaded as
 // ESM and its require() header would throw. .cjs is CommonJS everywhere.
 const HOOK_LIB = join(REPO, "hooks", "jev-hook-lib.cjs");
@@ -54,6 +55,7 @@ function buildLibSource() {
     ["resolveConfig", configBody],
     ["configPaths", configBody],
     ["main", coreBody],
+    ["postMain", coreBody],
   ]) {
     if (!body.includes(`function ${name}`)) {
       console.error(`[install-hook] ${name}() missing from built lib - refusing to install`);
@@ -70,7 +72,7 @@ function buildLibSource() {
     configBody +
     `\n` +
     coreBody +
-    `\nmodule.exports = { main, log, resolveConfig, configPaths };\n`
+    `\nmodule.exports = { main, postMain, log, resolveConfig, configPaths };\n`
   );
 }
 
@@ -83,6 +85,7 @@ const targetDir = resolve(
 
 for (const [label, p] of [
   ["hook entry", HOOK_ENTRY],
+  ["post-hook entry", POST_ENTRY],
   ["config source", CONFIG_SOURCE],
   ["core source", CORE_SOURCE],
 ]) {
@@ -122,6 +125,7 @@ function installOne(name, content) {
 }
 
 installOne("PreToolUse.cjs", readFileSync(HOOK_ENTRY, "utf8"));
+installOne("PostToolUse.cjs", readFileSync(POST_ENTRY, "utf8"));
 // Clean up previously installed .js artifacts so Cline doesn't run both and the
 // stale (ESM-fragile) lib isn't left behind.
 const oldJs = join(targetDir, "PreToolUse.js");

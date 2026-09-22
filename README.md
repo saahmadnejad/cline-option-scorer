@@ -23,7 +23,7 @@ Three independent surfaces, same scoring core (`src/jev-client.js`):
 
 | Surface | File | Use when |
 |---|---|---|
-| **PreToolUse hook** | `hooks/PreToolUse.cjs` | You want percentages even if the model never calls a tool (deterministic, automatic) |
+| **PreToolUse + PostToolUse hooks** | `hooks/PreToolUse.cjs`, `hooks/PostToolUse.cjs` | You want percentages even if the model never calls a tool (deterministic, automatic) — plus decision history captured after each answer |
 | **Cline plugin** | `cline-plugin.js` | SDK / CLI / Kanban sessions (`score_cline_options` tool + `beforeTool` hook) |
 | **MCP server** | `mcp-server.js` | VSCode extension, where SDK plugins are unsupported |
 
@@ -45,8 +45,9 @@ cline plugin install "$PKG"                    # plugin tool + beforeTool hook
 ```
 
 Open a **new** Cline session afterwards — hooks and plugins load at startup.
-Verify the hook with `tail -n 5 ~/.cline/data/logs/jev-hook.jsonl`
-(`intercept` / `enriched` / `skip` / `fail_open`).
+Verify the hooks with `tail -n 5 ~/.cline/data/logs/jev-hook.jsonl`
+(`intercept` / `enriched` / `skip` / `fail_open` from PreToolUse, plus `answer`
+and `answer_unclear` from PostToolUse).
 
 ## Configuration
 
@@ -78,7 +79,10 @@ exists (project root beats home):
 | `baseUrl` | provider endpoint | SystemOne endpoint |
 | `opencodeApiKey` / `typesafeApiKey` | — | Paid (`jev-1.13`) / direct TypeSafe (`jev-1.13.0`) auth |
 | `timeoutMs` | `10000` | Deadline per scoring call; the hook fails open after this |
-| `logDir` | `~/.cline/data/logs` | Where the hook appends its `jev-hook.jsonl` audit log |
+| `logDir` | `~/.cline/data/logs` | Where the hooks append `jev-hook.jsonl` (audit trail + decision history) |
+| `includeHistory` | `true` | Enrich `state` with recent question→answer pairs captured by the PostToolUse hook. **Note:** this sends snippets of your Cline conversation to the Jev API — set `false` to keep questions only |
+| `historyTurns` | `3` | How many past decisions to include |
+| `maxStateChars` | `2000` | Hard cap for the whole `state` payload |
 
 Every key is optional — with no file at all you get the anonymous free model.
 Explicit CLI flags / tool arguments always win over the file.
@@ -91,7 +95,7 @@ Explicit CLI flags / tool arguments always win over the file.
 ### Uninstall
 
 ```bash
-rm ~/.cline/hooks/PreToolUse.cjs ~/.cline/hooks/jev-hook-lib.cjs
+rm ~/.cline/hooks/PreToolUse.cjs ~/.cline/hooks/PostToolUse.cjs ~/.cline/hooks/jev-hook-lib.cjs
 rm -f ~/.cline/hooks/PreToolUse.js.bak ~/.cline/hooks/PreToolUse.js ~/.cline/hooks/jev-hook-lib.js   # older leftovers
 ```
 
