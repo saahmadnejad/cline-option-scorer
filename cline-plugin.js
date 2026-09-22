@@ -10,10 +10,15 @@
 //     deterministic enrichment below possible in-process, with no shell hook.
 // Zero dependencies, node >= 18.
 import { createTool } from "@cline/sdk";
+import { resolveConfig } from "./src/jev-config.js";
 
-const BASE_URL = process.env.JEV_BASE_URL || "https://opencode.ai/zen/v1/systemone";
-const MODEL = process.env.JEV_MODEL || "jev-1.13-free";
-const TIMEOUT_MS = Number(process.env.JEV_TIMEOUT_MS) || 10000;
+// Provider endpoints/models — everything else (keys, timeout, overrides) comes
+// from cline-jev.json via resolveConfig(). No environment variables.
+const PROVIDERS = {
+  typesafe: { baseUrl: "https://api.typesafe.ai/v1/systemone", model: "jev-1.13.0" },
+  zen: { baseUrl: "https://opencode.ai/zen/v1/systemone", model: "jev-1.13" },
+  "zen-free": { baseUrl: "https://opencode.ai/zen/v1/systemone", model: "jev-1.13-free" },
+};
 const QUESTION_TOOLS = /^ask_(question|followup_question)$/i;
 
 function slug(s) {
@@ -25,21 +30,23 @@ const withPercents = (options, probabilities) =>
   options.map((o) => (hasPct(o) || probabilities[o] == null ? o : `${o} (${(probabilities[o] * 100).toFixed(1)}%)`));
 
 async function scoreWithJev(state, question, options) {
+  const cfg = resolveConfig();
+  const known = PROVIDERS[cfg.provider] || PROVIDERS["zen-free"];
   const criteria = {};
   for (const opt of options) criteria[slug(opt)] = opt;
   const headers = { "Content-Type": "application/json" };
-  const key = process.env.OPENCODE_API_KEY || process.env.TYPESAFE_API_KEY;
+  const key = cfg.opencodeApiKey || cfg.typesafeApiKey;
   if (key) headers.Authorization = `Bearer ${key}`; // zen-free works anonymously
-  const res = await fetch(BASE_URL, {
+  const res = await fetch(cfg.baseUrl || known.baseUrl, {
     method: "POST",
     headers,
     body: JSON.stringify({
       state,
-      model: MODEL,
+      model: cfg.model || known.model,
       questions: { pick: { type: "choice", instructions: question, criteria } },
     }),
     // A stalled Jev must never block a Cline tool call.
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(cfg.timeoutMs),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`Jev ${res.status}: ${text.slice(0, 300)}`);

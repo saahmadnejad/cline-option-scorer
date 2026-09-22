@@ -1,20 +1,33 @@
-// Regression tests for hooks/PreToolUse.js, run against a local Jev stub.
+// Regression tests for hooks/PreToolUse.cjs, run against a local Jev stub.
 //
 // The bug these lock down: Cline's hook runtime flattens
 // `preToolUse.parameters` by JSON.stringify()-ing every non-string value, so
 // `options` arrives as the STRING '["A","B"]'. A guard of
 // Array.isArray(options) therefore silently no-oped on every real payload.
+//
+// Configuration is JSON-only: the hook reads cline-jev.json (project root
+// first) and NO environment variables. Each test spawns the hook with cwd set
+// to a throwaway project dir whose cline-jev.json points at the stub, so any
+// real ~/.cline/cline-jev.json can never leak into these runs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "hooks", "PreToolUse.js");
-// Every hook run writes its audit log here instead of ~/.cline/data/logs.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
+const HOOK = join(REPO, "hooks", "PreToolUse.cjs");
+// The hook is a thin entrypoint that requires the generated jev-hook-lib.js
+// beside it. Build it exactly like an install would — targeted at the repo,
+// never at ~/.cline.
+execFileSync(process.execPath, [join(REPO, "scripts", "install-hook.mjs"), "--dir", join(REPO, "hooks")], {
+  stdio: "pipe",
+});
+
+// Every hook run writes its audit log here (via `logDir` in the test config).
 const LOG_DIR = mkdtempSync(join(tmpdir(), "jev-hook-test-"));
 
 // Local stand-in for https://opencode.ai/zen/v1/systemone
@@ -60,11 +73,21 @@ function jevAnswer(probabilities) {
 }
 
 // Runs the hook exactly like Cline does: `node <file>`, payload on stdin.
-function runHook(payload, env = {}) {
+// Config is JSON-only: each run gets a throwaway project dir (package.json
+// marks it as a project root) whose cline-jev.json points scoring at the stub
+// and the audit log at LOG_DIR.
+function makeProjectDir(cfg) {
+  const dir = mkdtempSync(join(tmpdir(), "jev-proj-"));
+  writeFileSync(join(dir, "package.json"), '{ "name": "jev-hook-test-project" }');
+  writeFileSync(join(dir, "cline-jev.json"), JSON.stringify({ logDir: LOG_DIR, ...cfg }));
+  return dir;
+}
+
+function runHook(payload, cfg = {}) {
+  const dir = makeProjectDir(cfg);
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK], {
-      // CLINE_HOOK_LOG_DIR keeps the audit log out of the real ~/.cline/data/logs
-      env: { ...process.env, CLINE_HOOK_LOG_DIR: LOG_DIR, ...env },
+      cwd: dir,
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "";
@@ -105,7 +128,7 @@ test("scores a real Cline payload whose `options` arrived flattened as a JSON st
   });
   try {
     const input = { question: "Which CI/CD platform?", options: ["GitHub Actions", "GitLab CI", "Jenkins"] };
-    const { code, out } = await runHook(realPayload(input), { JEV_BASE_URL: stub.url });
+    const { code, out } = await runHook(realPayload(input), { baseUrl: stub.url });
     const result = parse(out);
 
     assert.equal(code, 0);
@@ -130,7 +153,7 @@ test("uses `tool_call.input` (unflattened) plus workspace context when both are 
     res.end(JSON.stringify(jevAnswer({ A: 0.6, B: 0.4 })(body)));
   });
   try {
-    const { out } = await runHook(realPayload({ question: "Pick one", options: ["A", "B"] }), { JEV_BASE_URL: stub.url });
+    const { out } = await runHook(realPayload({ question: "Pick one", options: ["A", "B"] }), { baseUrl: stub.url });
     assert.deepEqual(parse(out).overrideInput.options, ["A (60.0%)", "B (40.0%)"]);
     assert.match(seen.state, /^Pick one\n\(workspace: \/home\/ali\/Projects\/cline-option-scorer\)$/);
     assert.equal(seen.model, "jev-1.13-free");
@@ -148,7 +171,7 @@ test("decodes flattened parameters even when `tool_call.input` is absent", async
       workspaceRoots: ["/tmp"],
       preToolUse: { toolName: "ask_followup_question", parameters: flatten(input) },
     };
-    const { out } = await runHook(payload, { JEV_BASE_URL: stub.url });
+    const { out } = await runHook(payload, { baseUrl: stub.url });
     assert.deepEqual(parse(out).overrideInput.options, ["Alpha (100.0%)", "Beta (0.0%)"]);
   } finally {
     await stub.close();
@@ -161,7 +184,7 @@ test("decodes flattened parameters even when `tool_call.input` is absent", async
 test("passes through untouched for non-question tools (and never calls Jev)", async () => {
   const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({})(body))));
   try {
-    const { code, out } = await runHook(realPayload({ command: "ls -la" }, "execute_command"), { JEV_BASE_URL: stub.url });
+    const { code, out } = await runHook(realPayload({ command: "ls -la" }, "execute_command"), { baseUrl: stub.url });
     assert.equal(code, 0);
     assert.deepEqual(parse(out), {});
     assert.equal(stub.calls.length, 0);
@@ -174,7 +197,7 @@ test("is idempotent: options that already carry a percentage are never double-ta
   const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({})(body))));
   try {
     const input = { question: "Pick", options: ["A (10.0%)", "B"] };
-    const { out } = await runHook(realPayload(input), { JEV_BASE_URL: stub.url });
+    const { out } = await runHook(realPayload(input), { baseUrl: stub.url });
     assert.deepEqual(parse(out), {});
     assert.equal(stub.calls.length, 0);
   } finally {
@@ -185,7 +208,7 @@ test("is idempotent: options that already carry a percentage are never double-ta
 test("passes through a single-option question (nothing to rank)", async () => {
   const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({})(body))));
   try {
-    const { out } = await runHook(realPayload({ question: "Continue?", options: ["Yes"] }), { JEV_BASE_URL: stub.url });
+    const { out } = await runHook(realPayload({ question: "Continue?", options: ["Yes"] }), { baseUrl: stub.url });
     assert.deepEqual(parse(out), {});
     assert.equal(stub.calls.length, 0);
   } finally {
@@ -207,7 +230,7 @@ test("fails open (allows the question as-is) when Jev returns an error status", 
   });
   try {
     const input = { question: "Pick", options: ["A", "B"] };
-    const { code, out, err } = await runHook(realPayload(input), { JEV_BASE_URL: stub.url });
+    const { code, out, err } = await runHook(realPayload(input), { baseUrl: stub.url });
     assert.equal(code, 0);
     assert.deepEqual(parse(out), {});
     assert.match(err, /scoring failed/);
@@ -216,14 +239,14 @@ test("fails open (allows the question as-is) when Jev returns an error status", 
   }
 });
 
-test("fails open when Jev hangs past JEV_TIMEOUT_MS", async () => {
+test("fails open when Jev hangs past the configured timeoutMs", async () => {
   const stub = await startStub(() => {
     /* never responds: the hook must abort, not hang Cline */
   });
   try {
     const input = { question: "Pick", options: ["A", "B"] };
     const started = Date.now();
-    const { code, out } = await runHook(realPayload(input), { JEV_BASE_URL: stub.url, JEV_TIMEOUT_MS: "150" });
+    const { code, out } = await runHook(realPayload(input), { baseUrl: stub.url, timeoutMs: 150 });
     assert.equal(code, 0);
     assert.deepEqual(parse(out), {});
     assert.ok(Date.now() - started < 10000, "gave up well before the default 10s timeout");
@@ -243,7 +266,7 @@ test("unknown option slugs score 0.0% instead of NaN", async () => {
   );
   try {
     const { out } = await runHook(realPayload({ question: "Pick", options: ["Known", "Missing"] }), {
-      JEV_BASE_URL: stub.url,
+      baseUrl: stub.url,
     });
     assert.deepEqual(parse(out).overrideInput.options, ["Known (0.0%)", "Missing (0.0%)"]);
     assert.ok(!out.includes("NaN"));
@@ -252,10 +275,10 @@ test("unknown option slugs score 0.0% instead of NaN", async () => {
   }
 });
 
-test("writes an audit trail to CLINE_HOOK_LOG_DIR", async () => {
+test("writes an audit trail to the configured logDir", async () => {
   const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({ A: 0.9, B: 0.1 })(body))));
   try {
-    await runHook(realPayload({ question: "Log me", options: ["A", "B"] }), { JEV_BASE_URL: stub.url });
+    await runHook(realPayload({ question: "Log me", options: ["A", "B"] }), { baseUrl: stub.url });
     const lines = readFileSync(join(LOG_DIR, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const events = lines.filter((l) => l.question === "Log me").map((l) => l.event);
     assert.deepEqual(events, ["intercept", "enriched"]);

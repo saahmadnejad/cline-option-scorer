@@ -1,7 +1,6 @@
-#!/usr/bin/env node
-// PreToolUse hook: deterministically appends Jev 1.13 percentages to EVERY
-// ask_question call via overrideInput. Runs before the tool executes, so it
-// works no matter what the model does - no prompt mention needed.
+// jev-hook-core.js (part 1): scoring + payload helpers. No imports — builtins
+// come via __req, config via resolveConfig (both defined in src/jev-config.js,
+// which concatenates BEFORE this file in the generated CJS lib).
 //
 // HOW CLINE DELIVERS THE TOOL INPUT (verified against Cline 3.0.62):
 //   The hook runtime flattens `preToolUse.parameters` with a helper that
@@ -9,29 +8,17 @@
 //   as the STRING '["A","B"]' - never as an array. The unflattened object is
 //   still present at `tool_call.input`. We prefer `tool_call.input` and fall
 //   back to decoding the stringified `parameters`, so both shapes work.
-//
-// WHY THERE IS NO STATIC import/require OF NODE BUILTINS:
-//   Cline runs this as `node <file>`. Node picks the module system from the
-//   nearest package.json; there is none next to ~/.cline/hooks, so the file is
-//   CommonJS and `require()` works - but the same file inside this repo would
-//   be ESM ("type": "module"), where `require` throws. Dynamic import() is
-//   valid in both, so the optional logging dependency is loaded lazily.
-//
-// Fail-open: any error returns {} (allow as-is).
-// Install: `npm run install:hook` (copies to ~/.cline/hooks/PreToolUse.js,
-//          chmod +x) or `cline --hooks-dir <this dir>`.
-// Zero dependencies, node >= 18.
-
-const BASE_URL = process.env.JEV_BASE_URL || "https://opencode.ai/zen/v1/systemone";
-const MODEL = process.env.JEV_MODEL || "jev-1.13-free";
-const TIMEOUT_MS = Number(process.env.JEV_TIMEOUT_MS || 10000) || 10000;
-
 function slug(s) {
   const sl = String(s).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
   return (sl || "option").slice(0, 40);
 }
 const hasPct = (s) => /\(\d+(\.\d+)?%\)\s*$/.test(String(s));
 const withPct = (o, p) => `${o} (${(p * 100).toFixed(1)}%)`;
+const PROVIDERS = {
+  typesafe: { baseUrl: "https://api.typesafe.ai/v1/systemone", model: "jev-1.13.0" },
+  zen: { baseUrl: "https://opencode.ai/zen/v1/systemone", model: "jev-1.13" },
+  "zen-free": { baseUrl: "https://opencode.ai/zen/v1/systemone", model: "jev-1.13-free" },
+};
 
 // Undo Cline's parameter flattening: values that are JSON text get parsed back.
 function decodeParams(params) {
@@ -71,20 +58,22 @@ function contextState(event, question) {
 }
 
 async function score(state, question, options) {
+  const cfg = resolveConfig();
+  const known = PROVIDERS[cfg.provider] || PROVIDERS["zen-free"];
   const criteria = {};
   for (const o of options) criteria[slug(o)] = o;
   const headers = { "Content-Type": "application/json" };
-  const key = process.env.OPENCODE_API_KEY || process.env.TYPESAFE_API_KEY;
+  const key = cfg.opencodeApiKey || cfg.typesafeApiKey;
   if (key) headers.Authorization = `Bearer ${key}`; // zen-free works anonymously
-  const res = await fetch(BASE_URL, {
+  const res = await fetch(cfg.baseUrl || known.baseUrl, {
     method: "POST",
     headers,
     body: JSON.stringify({
       state,
-      model: MODEL,
+      model: cfg.model || known.model,
       questions: { pick: { type: "choice", instructions: question, criteria } },
     }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(cfg.timeoutMs),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`Jev ${res.status}`);
@@ -95,15 +84,18 @@ async function score(state, question, options) {
   return probs;
 }
 
-// Best-effort JSONL audit log. Loaded lazily so the file stays valid under
-// both CommonJS (~/.cline/hooks) and ESM (this repo, "type": "module").
+// Best-effort JSONL audit log. Builtins come via __req (defined by the ESM
+// source's createRequire bootstrap, or the generated CJS header) so this file
+// has no static imports and stays loadable as CJS *and* ESM.
 let logSink = null;
-async function log(entry) {
+async function log(entry, deps) {
   try {
     if (!logSink) {
-      const [fs, os] = await Promise.all([import("node:fs"), import("node:os")]);
-      const home = typeof os.homedir === "function" ? os.homedir() : process.env.HOME || ".";
-      const dir = process.env.CLINE_HOOK_LOG_DIR || `${home}/.cline/data/logs`;
+      const fs = deps?.fs || __req("node:fs");
+      const os = __req("node:os");
+      // The audit dir comes from cline-jev.json (`logDir`), never from the env.
+      const cfg = resolveConfig();
+      const dir = deps?.logDir || cfg.logDir || `${os.homedir()}/.cline/data/logs`;
       logSink = { fs, path: `${dir}/jev-hook.jsonl` };
     }
     logSink.fs.appendFileSync(logSink.path, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
@@ -157,7 +149,5 @@ async function main() {
   }
 }
 
-main().catch(async (e) => {
-  await log({ event: "fail_open", source: "hook", error: `unhandled: ${e?.message || e}` });
-  console.log(JSON.stringify({})); // never let the hook block a tool call
-});
+export { main, log };
+

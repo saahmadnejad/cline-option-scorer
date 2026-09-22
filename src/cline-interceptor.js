@@ -29,10 +29,10 @@ export function enrichXml(xml, probabilities) {
   });
 }
 
-export async function interceptClineAsk({ xml, state, provider = 'zen-free' }) {
+export async function interceptClineAsk({ xml, state, provider = 'zen-free', model }) {
   const { question, options } = parseClineAsk(xml);
   if (!question || !options.length) throw new Error('No <question> + <suggest>/<options> found in Cline XML');
   const st = state || question; // Cline gives no separate state; question doubles as state, pass task context via --state for better scores
-  const result = await scoreOptions({ state: st, question, options, provider });
+  const result = await scoreOptions({ state: st, question, options, provider, model });
   return { ...result, question, enrichedXml: enrichXml(xml, result.probabilities) };
 }

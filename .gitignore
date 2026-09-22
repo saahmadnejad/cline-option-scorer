@@ -20,3 +20,5 @@ logs/
 
 # hook installs
 hooks/*.bak
+# generated library — rebuilt by `npm run install:hook`
+hooks/jev-hook-lib.cjs

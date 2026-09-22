@@ -13,7 +13,7 @@ const TOOL = {
   description:
     "Score Cline question options with Jev 1.13 (Choice probabilities) and return percentages. " +
     "Call BEFORE ask_followup_question/ask_question, then use enrichedOptions labels (e.g. 'GitHub Actions (72.5%)'). " +
-    "Defaults to free OpenCode Zen jev-1.13-free (no key). Set OPENCODE_API_KEY for paid jev-1.13 or TYPESAFE_API_KEY for direct.",
+    "Defaults to free OpenCode Zen jev-1.13-free (no key). Configure provider, keys and timeouts via cline-jev.json (see README) — no environment variables are used.",
   inputSchema: {
     type: "object",
     properties: {
