@@ -295,6 +295,9 @@ test("writes an audit trail to the configured logDir", async () => {
     const lines = readFileSync(join(LOG_DIR, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const events = lines.filter((l) => l.question === "Log me").map((l) => l.event);
     assert.deepEqual(events, ["intercept", "enriched"]);
+    const row = lines.find((l) => l.event === "enriched" && l.question === "Log me");
+    assert.ok(typeof row.state === "string", "enriched row records the state");
+    assert.match(row.state, /Log me/); // at minimum the question itself is visible
   } finally {
     await stub.close();
   }
@@ -366,6 +369,10 @@ test("PostToolUse captures the chosen answer and the next question's state inclu
     await runHook(realPayload({ question: "Pick a framework", options: ["A", "B"] }), { baseUrl: stub.url });
     assert.match(seen.state, /Recent decisions in this session:/);
     assert.match(seen.state, /Q: Pick a DB → chose: Postgres/);
+    // the audit trail stores the state verbatim — what you read is what Jev got
+    const trail = readFileSync(join(LOG_DIR, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const logged = trail.filter((l) => l.event === "enriched" && l.question === "Pick a framework").pop();
+    assert.equal(logged.state, seen.state, "trail state === request state");
   } finally {
     await stub.close();
   }

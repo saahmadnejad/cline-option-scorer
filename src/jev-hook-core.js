@@ -171,13 +171,16 @@ function openDb(cfg) {
         tool TEXT,
         question TEXT,
         answer TEXT,
-        options TEXT
+        options TEXT,
+        state TEXT
       )`);
-    // Migration for stores created before the `proc` column existed.
-    try {
-      d.exec("ALTER TABLE events ADD COLUMN proc TEXT");
-    } catch {
-      /* column already there */
+    // Migration for stores created before these columns existed.
+    for (const col of ["proc", "state"]) {
+      try {
+        d.exec(`ALTER TABLE events ADD COLUMN ${col} TEXT`);
+      } catch {
+        /* column already there */
+      }
     }
     d.exec("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session, id)");
     d.exec("CREATE INDEX IF NOT EXISTS idx_events_proc ON events(proc, id)");
@@ -195,7 +198,7 @@ function openDb(cfg) {
 function insertEvent(d, entry) {
   try {
     d.prepare(
-      "INSERT INTO events (ts, session, proc, workspace, event, tool, question, answer, options) VALUES (?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO events (ts, session, proc, workspace, event, tool, question, answer, options, state) VALUES (?,?,?,?,?,?,?,?,?,?)"
     ).run(
       entry.ts || new Date().toISOString(),
       entry.session ?? null,
@@ -205,7 +208,8 @@ function insertEvent(d, entry) {
       entry.tool ?? null,
       entry.question ?? null,
       entry.answer ?? null,
-      Array.isArray(entry.options) ? JSON.stringify(entry.options) : null
+      Array.isArray(entry.options) ? JSON.stringify(entry.options) : null,
+      typeof entry.state === "string" ? entry.state : null
     );
   } catch {
     /* history is best-effort; never break a question over it */
@@ -372,9 +376,11 @@ async function main() {
   }
   await log({ event: "intercept", ...ctx, tool: toolName, source: "hook", question, options });
   try {
-    const probs = await score(buildState(event, question), question, options);
+    const state = buildState(event, question);
+    const probs = await score(state, question, options);
     const enriched = options.map((o) => withPct(o, probs[o]));
-    await log({ event: "enriched", ...ctx, source: "hook", question, enriched });
+    // `state` is recorded verbatim: the audit trail shows exactly what Jev received.
+    await log({ event: "enriched", ...ctx, source: "hook", question, state, enriched });
     console.log(JSON.stringify({ cancel: false, overrideInput: { ...input, question, options: enriched } }));
   } catch (e) {
     console.error(`[jev-percent] scoring failed, allowing as-is: ${e?.message || e}`);

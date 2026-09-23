@@ -111,6 +111,15 @@ Explicit CLI flags / tool arguments always win over the file.
 > `opencode` entry's `key` field). Copy it into `cline-jev.json` and keep the
 > file private: `chmod 600 ~/.cline/cline-jev.json`.
 
+Every `enriched` event records the **exact `state` that was sent to Jev** —
+question, workspace, and the recent-decisions block — so the audit trail shows
+precisely what context scored each question:
+
+```bash
+sqlite3 ~/.cline/data/logs/jev-hook.db \
+  "SELECT ts, state FROM events WHERE event='enriched' ORDER BY id DESC LIMIT 1;"
+```
+
 ### Uninstall
 
 ```bash
