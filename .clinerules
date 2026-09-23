@@ -1,2 +1,5 @@
 # Jev percentages for questions (cline-jev-percent)
 The `PreToolUse` hook appends Jev percentages to `ask_question`/`ask_followup_question` options automatically - do not fake or restate percentages yourself. If you want to know them BEFORE composing the question (or you are in a session without the hook), call `score_cline_options` (MCP or plugin tool) with state+question+options and use its `enrichedOptions` labels (e.g. `GitHub Actions (72.5%)`). Never invent percentages.
+
+## Release hygiene
+Every feature/fix must be validated as a brand-new user would experience it, not as an upgrade: run `npm run verify && npm run smoke` before releasing. `smoke` packs the current tree and installs the tarball into a clean prefix with an empty `$HOME`, then walks the full README path — bins, hook installer, one real enrichment, JSONL + SQLite state (including the legacy-trail backfill), zero-config CLI, MCP handshake, uninstall. Never release on upgrade-in-place evidence alone.
