@@ -502,3 +502,29 @@ test("a pre-SQLite JSONL trail is imported once, so existing history survives", 
     await stub.close();
   }
 });
+
+test("the backfill never duplicates the row the first writer appends", { skip: sqliteSkip }, async () => {
+  // On a brand-new store the first logged row must end up exactly once: it is
+  // written to SQLite before the JSONL append, so the one-time import cannot
+  // re-import it afterwards.
+  const dir = join(LOG_DIR, `dedup-${Date.now()}`, "logs");
+  mkdirSync(dir, { recursive: true });
+  let seen = null;
+  const stub = await startStub((body, res) => {
+    seen = body;
+    res.end(JSON.stringify(jevAnswer({ A: 1, B: 0 })(body)));
+  });
+  try {
+    await runHook(realPayload({ question: "First row?", options: ["A", "B"] }), {
+      baseUrl: stub.url,
+      logDir: dir,
+    });
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+    const d = new DatabaseSync(join(dir, "jev-hook.db"));
+    const n = d.prepare("SELECT COUNT(*) AS n FROM events WHERE event = 'intercept' AND question = ?").get("First row?").n;
+    assert.equal(n, 1, "the first intercept is stored exactly once");
+    d.close();
+  } finally {
+    await stub.close();
+  }
+});

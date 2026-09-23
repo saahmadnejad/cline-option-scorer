@@ -108,29 +108,39 @@ function sqlitePath(cfg) {
 
 // One-time import of the pre-SQLite JSONL trail, so history recorded before the
 // upgrade survives. Imported rows carry session/workspace NULL (= legacy) and
-// stay visible to every scope.
+// stay visible to every scope. Runs inside an IMMEDIATE transaction so two
+// hook processes racing on a fresh store don't each import the same trail.
 function backfill(d, jsonlPath) {
+  const fs = __req("node:fs");
   try {
-    if (d.prepare("SELECT COUNT(*) AS n FROM events").get().n > 0) return;
-    const fs = __req("node:fs");
-    const raw = fs.readFileSync(jsonlPath, "utf8");
-    const insert = d.prepare(
-      "INSERT INTO events (ts, session, workspace, event, tool, question, answer, options) VALUES (?,?,?,?,?,?,?,?)"
-    );
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const e = JSON.parse(line);
-        if (!e?.event) continue;
-        insert.run(
-          e.ts ?? null, e.session ?? null, e.workspace ?? null, String(e.event),
-          e.tool ?? null, e.question ?? null, e.answer ?? null,
-          Array.isArray(e.options) ? JSON.stringify(e.options) : null
+    d.exec("BEGIN IMMEDIATE");
+    let done = false;
+    try {
+      if (d.prepare("SELECT COUNT(*) AS n FROM events").get().n > 0) {
+        done = true;
+      } else {
+        const raw = fs.readFileSync(jsonlPath, "utf8");
+        const insert = d.prepare(
+          "INSERT INTO events (ts, session, proc, workspace, event, tool, question, answer, options) VALUES (?,?,?,?,?,?,?,?,?)"
         );
-      } catch {}
+        for (const line of raw.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            const e = JSON.parse(line);
+            if (!e?.event) continue;
+            insert.run(
+              e.ts ?? null, e.session ?? null, e.proc ?? null, e.workspace ?? null, String(e.event),
+              e.tool ?? null, e.question ?? null, e.answer ?? null,
+              Array.isArray(e.options) ? JSON.stringify(e.options) : null
+            );
+          } catch {}
+        }
+      }
+    } finally {
+      d.exec(done ? "ROLLBACK" : "COMMIT");
     }
   } catch {
-    /* no trail to import */
+    /* no trail to import, or lost the creation race: the other process imported it */
   }
 }
 
@@ -302,7 +312,9 @@ async function log(entry, deps) {
       const fs = deps?.fs || __req("node:fs");
       const os = __req("node:os");
       // The audit dir comes from cline-jev.json (`logDir`), never from the env.
-      const cfg = deps?.cfg || resolveConfig();
+      // Test callers may inject logDir/cfg via deps: merge, don't replace, so the
+      // JSONL and SQLite sinks always resolve the SAME directory.
+      const cfg = { ...resolveConfig(), ...(deps?.cfg || {}), ...(deps?.logDir ? { logDir: deps.logDir } : {}) };
       const dir = deps?.logDir || cfg.logDir || `${os.homedir()}/.cline/data/logs`;
       // A fresh logDir does not exist yet; without this every write fails
       // silently and the decision history would never populate.
@@ -312,11 +324,12 @@ async function log(entry, deps) {
       logSink = { fs, cfg, path: `${dir}/jev-hook.jsonl` };
     }
     const record = { ts: new Date().toISOString(), ...entry };
-    // 1) JSONL: the human-readable audit trail (`tail` it to debug).
-    logSink.fs.appendFileSync(logSink.path, JSON.stringify(record) + "\n");
-    // 2) SQLite: the queryable store behind decision history, scoped per session.
+    // 1) SQLite FIRST: the one-time backfill must not see this row, or it
+    //    would import it and then insertEvent would store it a second time.
     const d = openDb(logSink.cfg);
     if (d) insertEvent(d, record);
+    // 2) JSONL: the human-readable audit trail (`tail` it to debug).
+    logSink.fs.appendFileSync(logSink.path, JSON.stringify(record) + "\n");
   } catch {
     /* logging is observational only */
   }
