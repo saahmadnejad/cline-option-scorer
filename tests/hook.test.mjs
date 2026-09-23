@@ -490,6 +490,7 @@ test("a pre-SQLite JSONL trail is imported once, so existing history survives", 
     join(legacyDir, "jev-hook.jsonl"),
     [
       JSON.stringify({ ts: new Date().toISOString(), event: "intercept", question: "Legacy question?", options: ["A", "B"] }),
+      JSON.stringify({ ts: new Date().toISOString(), event: "enriched", question: "Legacy scored?", state: "Legacy scored? (ctx)", enriched: ["A (60.0%)", "B (40.0%)"] }),
       JSON.stringify({ ts: new Date().toISOString(), event: "answer", question: "Legacy question?", answer: "B" }),
     ].join("\n") + "\n"
   );
@@ -505,6 +506,14 @@ test("a pre-SQLite JSONL trail is imported once, so existing history survives", 
       logDir: legacyDir,
     });
     assert.match(seen.state, /Q: Legacy question\? → chose: B/);
+    // the imported enriched row must keep its state column (backfill shares
+    // the same column mapping as live writes)
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+    const d = new DatabaseSync(join(legacyDir, "jev-hook.db"));
+    const row = d.prepare("SELECT state FROM events WHERE event = 'enriched' AND question = 'Legacy scored?'").get();
+    assert.ok(row, "the enriched row from the JSONL trail was imported");
+    assert.match(row.state, /Legacy scored\?/);
+    d.close();
   } finally {
     await stub.close();
   }

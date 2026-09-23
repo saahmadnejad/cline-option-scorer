@@ -120,19 +120,14 @@ function backfill(d, jsonlPath) {
         done = true;
       } else {
         const raw = fs.readFileSync(jsonlPath, "utf8");
-        const insert = d.prepare(
-          "INSERT INTO events (ts, session, proc, workspace, event, tool, question, answer, options) VALUES (?,?,?,?,?,?,?,?,?)"
-        );
         for (const line of raw.split("\n")) {
           if (!line.trim()) continue;
           try {
             const e = JSON.parse(line);
             if (!e?.event) continue;
-            insert.run(
-              e.ts ?? null, e.session ?? null, e.proc ?? null, e.workspace ?? null, String(e.event),
-              e.tool ?? null, e.question ?? null, e.answer ?? null,
-              Array.isArray(e.options) ? JSON.stringify(e.options) : null
-            );
+            // shared column mapping with live writes — a separate INSERT here
+            // once silently dropped the `state` column on imported rows
+            insertEvent(d, e);
           } catch {}
         }
       }
