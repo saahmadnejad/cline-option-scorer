@@ -1,6 +1,11 @@
-// jev-hook-core.js (part 1): scoring + payload helpers. No imports — builtins
-// come via __req, config via resolveConfig (both defined in src/jev-config.js,
-// which concatenates BEFORE this file in the generated CJS lib).
+// jev-hook-core.js (part 1): scoring + payload helpers.
+// Builtins come via __req, config via resolveConfig. In the generated CJS lib
+// both are supplied by the concatenation of src/jev-config.js; when this file is
+// loaded as ESM (mcp-server.js does) the two lines below provide them. The
+// installer strips both lines, so nothing is ever declared twice.
+import { createRequire as __createRequire } from "node:module";
+import { resolveConfig } from "./jev-config.js";
+const __req = typeof require === "function" ? require : __createRequire(import.meta.url);
 //
 // HOW CLINE DELIVERS THE TOOL INPUT (verified against Cline 3.0.62):
 //   The hook runtime flattens `preToolUse.parameters` with a helper that
@@ -44,9 +49,16 @@ function decodeParams(params) {
 }
 
 // Raw tool input when present, else the decoded (flattened) parameters.
+// PreToolUse delivers the tool input as `preToolUse.parameters`, PostToolUse as
+// `postToolUse.parameters` — probing only the PreToolUse key left every captured
+// answer without its question (`question: ""` on 24/24 real rows), and history
+// pairs are matched by question text, so no real pair could ever assemble.
 function readInput(event) {
   const raw = event?.tool_call?.input;
-  const params = decodeParams(event?.preToolUse?.parameters);
+  const params = {
+    ...decodeParams(event?.preToolUse?.parameters),
+    ...decodeParams(event?.postToolUse?.parameters),
+  };
   return raw && typeof raw === "object" && !Array.isArray(raw) ? { ...params, ...raw } : params;
 }
 
@@ -360,12 +372,12 @@ async function main() {
     return;
   }
   if (options.length < 2) {
-    await log({ event: "skip", reason: "single_option" });
+    await log({ event: "skip", reason: "single_option", ...ctx });
     console.log(JSON.stringify({})); // nothing to score
     return;
   }
   if (options.some(hasPct)) {
-    await log({ event: "skip", reason: "already_enriched" });
+    await log({ event: "skip", reason: "already_enriched", ...ctx });
     console.log(JSON.stringify({})); // idempotent: never double-tag
     return;
   }
@@ -417,6 +429,24 @@ function extractAnswer(event) {
   return null;
 }
 
+// Shape of a hook payload, recorded when we could not extract what we needed.
+// Keys and value KINDS only — never the contents — so a shape change in Cline is
+// diagnosable from the audit trail without leaking question/answer text.
+function shapeOf(event) {
+  const kind = (v) => (v == null ? "absent" : Array.isArray(v) ? "array" : typeof v);
+  return {
+    eventKeys: Object.keys(event || {}),
+    toolCallKeys: Object.keys(event?.tool_call || {}),
+    preToolUseKeys: Object.keys(event?.preToolUse || {}),
+    postToolUseKeys: Object.keys(event?.postToolUse || {}),
+    paramsKind: {
+      pre: kind(event?.preToolUse?.parameters),
+      post: kind(event?.postToolUse?.parameters),
+      input: kind(event?.tool_call?.input),
+    },
+  };
+}
+
 // Fires AFTER ask_question/ask_followup_question completes. Observes only —
 // always responds {} so the tool result is never modified. The captured
 // question→answer pair is what the next PreToolUse scoring reads as history.
@@ -439,20 +469,16 @@ async function postMain() {
   const question = typeof input?.question === "string" ? input.question : "";
   const answer = extractAnswer(event);
   const ctx = { ...sessionInfo(event), workspace: workspaceRoot(event) };
-  if (answer) {
+  if (answer && question) {
     await log({ event: "answer", ...ctx, source: "hook", tool: toolName, question, answer });
+  } else if (answer) {
+    // The answer was captured but its question was not. History pairs are
+    // matched by question text, so this row would never pair — record the
+    // payload shape that tells us where the question actually lives.
+    await log({ event: "question_unclear", ...ctx, source: "hook", tool: toolName, answer, ...shapeOf(event) });
   } else {
     // Self-debugging: if the shape ever changes, the trail tells us where to look.
-    await log({
-      event: "answer_unclear",
-      ...ctx,
-      source: "hook",
-      tool: toolName,
-      question,
-      eventKeys: Object.keys(event || {}),
-      toolCallKeys: Object.keys(event?.tool_call || {}),
-      postToolUseKeys: Object.keys(event?.postToolUse || {}),
-    });
+    await log({ event: "answer_unclear", ...ctx, source: "hook", tool: toolName, question, ...shapeOf(event) });
   }
   console.log(JSON.stringify({}));
 }

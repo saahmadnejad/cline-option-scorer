@@ -40,7 +40,7 @@ function buildLibSource() {
   const strip = (src) =>
     src
       .split("\n")
-      .filter((l) => !/^import\s+[{\w][^;]*from\s+["']node:/.test(l))
+      .filter((l) => !/^import\s+[{\w][^;]*from\s+["'](?:node:|\.\/jev-config\.js)/.test(l))
       // The ESM createRequire/__req bootstrap is replaced by the generated
       // header below — drop the source lines so nothing is declared twice.
       .filter((l) => !/^\s*const __req\s*=/.test(l))

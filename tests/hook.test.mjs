@@ -544,3 +544,131 @@ test("the backfill never duplicates the row the first writer appends", { skip: s
     await stub.close();
   }
 });
+
+// ---------- PostToolUse: the real payload carries the input in postToolUse.parameters ----------
+
+function trailRows() {
+  return readFileSync(join(LOG_DIR, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+}
+
+test("captures the question when PostToolUse delivers it via postToolUse.parameters", async () => {
+  // Production shape: `tool_call.input` is absent and the answer lives in the
+  // tool result, so the question must come from the decoded postToolUse
+  // parameters. Without this every captured answer had question:"" and could
+  // never pair into history.
+  const stamp = Date.now();
+  const question = `Production shape ${stamp}?`;
+  const answer = `Chosen answer ${stamp}`;
+  await runPostHook({
+    hookName: "tool_call",
+    tool_call: { id: "call-prod", name: "ask_followup_question", output: answer },
+    postToolUse: { toolName: "ask_followup_question", parameters: flatten({ question, options: ["x", "y"] }) },
+  });
+  const row = trailRows().find((l) => l.answer === answer);
+  assert.ok(row, "the answer was captured");
+  assert.equal(row.event, "answer");
+  assert.equal(row.question, question, "question recovered from postToolUse.parameters");
+});
+
+test("logs question_unclear (with the payload shape) when an answer arrives without its question", async () => {
+  const stamp = Date.now();
+  const answer = `Orphan answer ${stamp}`;
+  await runPostHook({
+    hookName: "tool_call",
+    tool_call: { name: "ask_followup_question", output: answer },
+    postToolUse: { toolName: "ask_followup_question" },
+  });
+  const row = trailRows().find((l) => l.event === "question_unclear" && l.answer === answer);
+  assert.ok(row, "question_unclear row written instead of an unpaired answer row");
+  assert.deepEqual(row.paramsKind, { pre: "absent", post: "absent", input: "absent" });
+  assert.ok(Array.isArray(row.toolCallKeys) && Array.isArray(row.postToolUseKeys));
+});
+
+test("skip rows carry the session so skips stay attributable", async () => {
+  const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({})(body))));
+  const question = `Already scored ${Date.now()}?`;
+  try {
+    await runHook(sessionPayload("skip-sess-1", { question, options: ["A (10.0%)", "B (90.0%)"] }), { baseUrl: stub.url });
+    const row = trailRows().find((l) => l.event === "skip" && l.reason === "already_enriched" && l.session === "skip-sess-1");
+    assert.ok(row, "the skip row records the session id");
+  } finally {
+    await stub.close();
+  }
+});
+
+// ---------- MCP path: pre-scored questions must reach the same trail ----------
+
+function runMcp(frames, cfg = {}) {
+  const dir = makeProjectDir(cfg);
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [join(REPO, "mcp-server.js")], { cwd: dir, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.stdin.write(frames.map((f) => JSON.stringify(f)).join("\n") + "\n");
+    child.stdin.end();
+    child.on("close", (code) => resolve({ code, out }));
+  });
+}
+
+const mcpCall = (id, args) => ({
+  jsonrpc: "2.0",
+  id,
+  method: "tools/call",
+  params: { name: "score_cline_options", arguments: args },
+});
+
+test("MCP-scored questions are logged (source mcp) instead of vanishing from the trail", async () => {
+  const dir = join(LOG_DIR, `mcp-log-${Date.now()}`, "logs");
+  const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({ A: 0.8, B: 0.2 })(body))));
+  const question = `MCP trail ${Date.now()}?`;
+  try {
+    const { code, out } = await runMcp([mcpCall(1, { state: "mcp-context", question, options: ["A", "B"] })], {
+      baseUrl: stub.url,
+      logDir: dir,
+    });
+    assert.equal(code, 0);
+    assert.match(out, /enrichedOptions/);
+    const rows = readFileSync(join(dir, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.deepEqual(
+      rows.map((r) => [r.event, r.source]),
+      [["intercept", "mcp"], ["enriched", "mcp"]]
+    );
+    assert.equal(rows[1].state, "mcp-context", "the state sent to Jev is recorded");
+    assert.match(rows[1].enriched.join(" "), /A \(80\.0%\)/);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("a question scored through MCP becomes history for the next hook-scored question", { skip: sqliteSkip }, async () => {
+  // The user-facing loop this locks down: the model pre-scores via the MCP tool,
+  // the user answers, and the NEXT question must carry that pair as context —
+  // even though no hook ever scored the first question.
+  const dir = join(LOG_DIR, `mcp-history-${Date.now()}`, "logs");
+  const stamp = Date.now();
+  const mcpQuestion = `MCP history source ${stamp}?`;
+  const answer = `Postgres ${stamp}`;
+  const nextQuestion = `Follow up after MCP ${stamp}?`;
+  let seen = null;
+  const stub = await startStub((body, res) => {
+    seen = body;
+    res.end(JSON.stringify(jevAnswer({ A: 1, B: 0 })(body)));
+  });
+  try {
+    await runMcp([mcpCall(1, { state: "ctx", question: mcpQuestion, options: [answer, "MySQL"] })], {
+      baseUrl: stub.url,
+      logDir: dir,
+    });
+    await runPostHook(postPayload({ question: mcpQuestion, options: [answer, "MySQL"] }, answer), {
+      baseUrl: stub.url,
+      logDir: dir,
+    });
+    await runHook(realPayload({ question: nextQuestion, options: ["A", "B"] }), { baseUrl: stub.url, logDir: dir });
+    assert.match(seen.state, /Recent decisions in this session:/, "history block present");
+    assert.match(seen.state, new RegExp(`Q: .*MCP history source ${stamp}`), "the MCP-scored question is in context");
+    assert.match(seen.state, new RegExp(`chose: ${answer}`), "with the answer the user chose");
+  } finally {
+    await stub.close();
+  }
+});
+
