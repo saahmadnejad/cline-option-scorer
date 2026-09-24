@@ -697,6 +697,14 @@ test("a dismissed question is recorded, but never as a decision", async () => {
   assert.ok(dismissed, "logged as answer_dismissed with the question kept");
   assert.equal(dismissed.reason, "dismissed");
   assert.ok(!rows.some((l) => l.event === "answer" && String(l.answer).includes("dismissed")), "never logged as a real answer");
+  if (hasSqlite) {
+    // The dismissal must be queryable in the store, not only in the JSONL.
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+    const d = new DatabaseSync(join(LOG_DIR, "jev-hook.db"));
+    const row = d.prepare("SELECT reason FROM events WHERE event = 'answer_dismissed' AND question = ?").get(question);
+    d.close();
+    assert.equal(row?.reason, "dismissed", "reason column records why it was not a decision");
+  }
 });
 
 test("a tool-schema failure is not recorded as a decision either", async () => {

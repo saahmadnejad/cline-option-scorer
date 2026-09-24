@@ -139,6 +139,11 @@ and now visibly:
   neither scored nor added to decision history. The audit trail records it once
   as `answer_dismissed` so you can see what happened. Re-ask with options when
   that decision should count.
+
+  ```bash
+  sqlite3 ~/.cline/data/logs/jev-hook.db \
+    "SELECT ts, reason, question FROM events WHERE event='answer_dismissed' ORDER BY id DESC LIMIT 5;"
+  ```
 - **Prose questions** (the model asks in plain text, without the tool): there is
   nothing to score, so no percentages appear.
 

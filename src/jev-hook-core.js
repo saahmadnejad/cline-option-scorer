@@ -180,10 +180,11 @@ function openDb(cfg) {
         answer TEXT,
         options TEXT,
         state TEXT,
-        source TEXT
+        source TEXT,
+        reason TEXT
       )`);
     // Migration for stores created before these columns existed.
-    for (const col of ["proc", "state", "source"]) {
+    for (const col of ["proc", "state", "source", "reason"]) {
       try {
         d.exec(`ALTER TABLE events ADD COLUMN ${col} TEXT`);
       } catch {
@@ -206,7 +207,7 @@ function openDb(cfg) {
 function insertEvent(d, entry) {
   try {
     d.prepare(
-      "INSERT INTO events (ts, session, proc, workspace, event, tool, question, answer, options, state, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO events (ts, session, proc, workspace, event, tool, question, answer, options, state, source, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
     ).run(
       entry.ts || new Date().toISOString(),
       entry.session ?? null,
@@ -218,7 +219,8 @@ function insertEvent(d, entry) {
       entry.answer ?? null,
       Array.isArray(entry.options) ? JSON.stringify(entry.options) : null,
       typeof entry.state === "string" ? entry.state : null,
-      entry.source ?? null
+      entry.source ?? null,
+      entry.reason ?? null
     );
   } catch {
     /* history is best-effort; never break a question over it */
