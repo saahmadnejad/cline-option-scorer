@@ -1,6 +1,6 @@
 {
   "name": "@donbee/cline-option-scorer",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Add percentage to each Cline ask_followup_question option using Jev 1.13 (TypeSafe / OpenCode Zen jev-1.13-free)",
   "type": "module",
   "main": "src/jev-client.js",
