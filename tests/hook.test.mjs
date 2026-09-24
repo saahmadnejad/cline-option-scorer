@@ -591,6 +591,8 @@ test("skip rows carry the session so skips stay attributable", async () => {
     await runHook(sessionPayload("skip-sess-1", { question, options: ["A (10.0%)", "B (90.0%)"] }), { baseUrl: stub.url });
     const row = trailRows().find((l) => l.event === "skip" && l.reason === "already_enriched" && l.session === "skip-sess-1");
     assert.ok(row, "the skip row records the session id");
+    assert.equal(row.question, question, "and the question it skipped");
+    assert.equal(row.source, "hook");
   } finally {
     await stub.close();
   }

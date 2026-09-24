@@ -376,12 +376,14 @@ async function main() {
     return;
   }
   if (options.length < 2) {
-    await log({ event: "skip", reason: "single_option", ...ctx });
+    await log({ event: "skip", reason: "single_option", ...ctx, source: "hook", question });
     console.log(JSON.stringify({})); // nothing to score
     return;
   }
   if (options.some(hasPct)) {
-    await log({ event: "skip", reason: "already_enriched", ...ctx });
+    // The question is kept so the trail shows WHAT was bypassed (usually a
+    // question the model pre-scored through the MCP tool).
+    await log({ event: "skip", reason: "already_enriched", ...ctx, source: "hook", question });
     console.log(JSON.stringify({})); // idempotent: never double-tag
     return;
   }
