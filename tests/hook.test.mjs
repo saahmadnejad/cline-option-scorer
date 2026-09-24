@@ -635,6 +635,17 @@ test("MCP-scored questions are logged (source mcp) instead of vanishing from the
     );
     assert.equal(rows[1].state, "mcp-context", "the state sent to Jev is recorded");
     assert.match(rows[1].enriched.join(" "), /A \(80\.0%\)/);
+    if (hasSqlite) {
+      // The README documents querying the store by source, so the column must
+      // exist there too — not just in the JSONL trail.
+      const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+      const d = new DatabaseSync(join(dir, "jev-hook.db"));
+      const bySource = d.prepare("SELECT COUNT(*) AS n FROM events WHERE source = 'mcp'").get().n;
+      const stateRow = d.prepare("SELECT state FROM events WHERE source = 'mcp' AND event = 'enriched'").get();
+      d.close();
+      assert.equal(bySource, 2, "both MCP rows are queryable by source");
+      assert.equal(stateRow.state, "mcp-context");
+    }
   } finally {
     await stub.close();
   }
