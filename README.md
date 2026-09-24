@@ -153,6 +153,7 @@ always type over them.
 ```bash
 rm ~/.cline/hooks/PreToolUse.cjs ~/.cline/hooks/PostToolUse.cjs ~/.cline/hooks/jev-hook-lib.cjs
 rm -f ~/.cline/hooks/PreToolUse.js.bak ~/.cline/hooks/PreToolUse.js ~/.cline/hooks/jev-hook-lib.js   # older leftovers
+rm -rf ~/.cline/skills/jev-percentages ~/.cline/rules/cline-option-scorer.md   # prompt steering (installed by install-hook)
 rm -f ~/.cline/data/logs/jev-hook.db*    # decision history (omit to keep it)
 ```
 

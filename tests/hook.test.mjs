@@ -727,3 +727,22 @@ test("the MCP tool refuses more than 5 options (Cline's limit) with an actionabl
   }
 });
 
+test("the installer also drops the prompt-steering skill and rules into a real .cline home", async () => {
+  // Without these files no session ever reads the 2-5 option rule, so the model
+  // keeps composing questions the hooks can't help with.
+  const fakeHome = mkdtempSync(join(tmpdir(), "jev-fakehome-"));
+  execFileSync(process.execPath, [join(REPO, "scripts", "install-hook.mjs")], {
+    env: { ...process.env, HOME: fakeHome },
+    stdio: "pipe",
+  });
+  const skill = join(fakeHome, ".cline", "skills", "jev-percentages", "SKILL.md");
+  const rules = join(fakeHome, ".cline", "rules", "cline-option-scorer.md");
+  assert.ok(existsSync(skill), "skill installed into the given home");
+  assert.ok(existsSync(rules), "rules installed into the given home");
+  assert.match(readFileSync(skill, "utf8"), /2-5/, "skill states the option cap");
+  assert.match(readFileSync(skill, "utf8"), /dismiss/i, "skill explains typed/dismissed answers");
+  assert.match(readFileSync(rules, "utf8"), /2-5/, "rules state the option cap");
+  // The hooks themselves must still land there too.
+  assert.ok(existsSync(join(fakeHome, ".cline", "hooks", "PreToolUse.cjs")));
+});
+

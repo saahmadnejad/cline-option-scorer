@@ -74,6 +74,14 @@ const hooks = join(home, ".cline", "hooks");
 for (const f of ["PreToolUse.cjs", "PostToolUse.cjs", "jev-hook-lib.cjs"])
   ok(existsSync(join(hooks, f)), `hook file installed: ${f}`);
 ok(readFileSync(join(hooks, "jev-hook-lib.cjs"), "utf8").includes("state TEXT"), "installed lib carries the state schema");
+// Prompt steering must reach real sessions: without these files the model never
+// learns the 2-5 option rule or what happens to typed answers.
+const skillFile = join(home, ".cline", "skills", "jev-percentages", "SKILL.md");
+const rulesFile = join(home, ".cline", "rules", "cline-option-scorer.md");
+ok(existsSync(skillFile), "skill installed: ~/.cline/skills/jev-percentages/SKILL.md");
+ok(existsSync(rulesFile), "rules installed: ~/.cline/rules/cline-option-scorer.md");
+ok(/2-5/.test(readFileSync(skillFile, "utf8")), "installed skill states the 2-5 option cap");
+ok(/dismiss/i.test(readFileSync(skillFile, "utf8")), "installed skill explains typed/dismissed answers");
 
 // 5) one real enrichment through the installed hook (anonymous free model)
 const q = `Smoke: fresh install works end to end? ${Date.now()}`;
@@ -136,7 +144,13 @@ ok(typeof mcpRows.find((e) => e.event === "enriched")?.state === "string", "MCP 
 
 // 9) README uninstall — the three files go away
 for (const f of ["PreToolUse.cjs", "PostToolUse.cjs", "jev-hook-lib.cjs"]) rmSync(join(hooks, f), { force: true });
-ok(!existsSync(join(hooks, "PreToolUse.cjs")) && !existsSync(join(hooks, "jev-hook-lib.cjs")), "README uninstall removes the hooks");
+rmSync(join(home, ".cline", "skills", "jev-percentages"), { recursive: true, force: true });
+rmSync(join(home, ".cline", "rules", "cline-option-scorer.md"), { force: true });
+ok(
+  !existsSync(join(hooks, "PreToolUse.cjs")) && !existsSync(join(hooks, "jev-hook-lib.cjs")) &&
+  !existsSync(skillFile) && !existsSync(rulesFile),
+  "README uninstall removes hooks, skill and rules"
+);
 
 if (failures === 0) {
   rmSync(tmp, { recursive: true, force: true });

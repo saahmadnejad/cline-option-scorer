@@ -140,6 +140,29 @@ if (existsSync(oldLib)) {
 }
 installOne("jev-hook-lib.cjs", libSource);
 
+// Prompt steering: the skill + rules tell the model to ask with 2-5 options.
+// They are the weakest layer, but without files in ~/.cline no session ever sees
+// them. Installed only for the real (~/.cline) target — --dir is a test/dev
+// override and must not write into the repo.
+if (dirFlag < 0) {
+  const clineDir = dirname(targetDir); // <home>/.cline
+  const steering = [
+    [join(REPO, "skills", "jev-percentages", "SKILL.md"), join(clineDir, "skills", "jev-percentages", "SKILL.md")],
+    [join(REPO, ".clinerules"), join(clineDir, "rules", "cline-option-scorer.md")],
+  ];
+  for (const [src, dst] of steering) {
+    if (!existsSync(src)) continue;
+    mkdirSync(dirname(dst), { recursive: true });
+    const content = readFileSync(src, "utf8");
+    if (existsSync(dst) && readFileSync(dst, "utf8") === content) {
+      console.log(`[install-hook] already up to date: ${dst}`);
+      continue;
+    }
+    writeFileSync(dst, content);
+    console.log(`[install-hook] installed prompt steering: ${dst}`);
+  }
+}
+
 const EXTENSIONS = new Set(["", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".py", ".ps1"]);
 const EVENT_NAMES = new Map([
   ["taskstart", "TaskStart"],
