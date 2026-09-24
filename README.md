@@ -120,6 +120,15 @@ sqlite3 ~/.cline/data/logs/jev-hook.db \
   "SELECT ts, state FROM events WHERE event='enriched' ORDER BY id DESC LIMIT 1;"
 ```
 
+Questions scored through the **MCP tool** are recorded in the same trail with
+`source: "mcp"` — that is what lets a pre-scored question become context for the
+next one (the hooks only ever see the answer):
+
+```bash
+sqlite3 ~/.cline/data/logs/jev-hook.db \
+  "SELECT ts, source, question FROM events WHERE source='mcp' ORDER BY id DESC LIMIT 5;"
+```
+
 ### Uninstall
 
 ```bash

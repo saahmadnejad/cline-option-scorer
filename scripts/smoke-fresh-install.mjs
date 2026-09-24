@@ -107,20 +107,32 @@ d.close();
 const cli = run(join(bins, "cline-option-scorer"), ["--question", "Smoke CLI works?", "--option", "yes", "--option", "no"], { HOME: home });
 ok(cli.status === 0 && /%/.test(cli.out), "zero-config CLI scores with percentages", cli.out.slice(-300));
 
-// 8) MCP server handshake — initialize + tools/list
+// 8) MCP server: handshake + one real scoring call that must reach the audit trail
 const mcp = spawn(NODE, [join(prefix, "node_modules", pkg.name, "mcp-server.js")], {
   env: { ...process.env, HOME: home }, cwd: work, stdio: ["pipe", "pipe", "pipe"],
 });
 let mcpOut = "";
 mcp.stdout.on("data", (c) => (mcpOut += c));
-mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } }) + "\n");
-mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) + "\n");
+const mcpSend = (msg) => mcp.stdin.write(JSON.stringify(msg) + "\n");
+mcpSend({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } });
+mcpSend({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+const mcpQ = `Smoke MCP scoring works? ${Date.now()}`;
+mcpSend({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "score_cline_options", arguments: { state: "smoke context", question: mcpQ, options: ["yes", "no"] } } });
 mcp.stdin.end();
 const mcpCode = await new Promise((res) => {
-  const t = setTimeout(() => { mcp.kill(); res(-1); }, 15_000);
+  const t = setTimeout(() => { mcp.kill(); res(-1); }, 30_000);
   mcp.on("close", (c) => { clearTimeout(t); res(c); });
 });
 ok(mcpCode === 0 && /"name"\s*:\s*"(score_cline_options|jev-percent)"/.test(mcpOut), "MCP server answers initialize + tools/list", mcpOut.slice(0, 300));
+ok(/enrichedOptions/.test(mcpOut), "MCP server returns enriched option labels", mcpOut.slice(-300));
+const mcpRows = readFileSync(join(logs, "jev-hook.jsonl"), "utf8").trim().split("\n")
+  .map((l) => JSON.parse(l)).filter((e) => e.question === mcpQ);
+ok(
+  mcpRows.map((e) => `${e.event}/${e.source}`).join(",") === "intercept/mcp,enriched/mcp",
+  "MCP-scored questions reach the audit trail (source mcp)",
+  JSON.stringify(mcpRows.map((e) => [e.event, e.source]))
+);
+ok(typeof mcpRows.find((e) => e.event === "enriched")?.state === "string", "MCP enriched row records the state sent to Jev");
 
 // 9) README uninstall — the three files go away
 for (const f of ["PreToolUse.cjs", "PostToolUse.cjs", "jev-hook-lib.cjs"]) rmSync(join(hooks, f), { force: true });

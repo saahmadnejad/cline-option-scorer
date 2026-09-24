@@ -4,6 +4,7 @@
 // ask_followup_question options with Jev 1.13 BEFORE asking the user.
 // Transport: newline-delimited JSON-RPC 2.0 over stdio.
 import { scoreOptions } from "./src/jev-client.js";
+import { log } from "./src/jev-hook-core.js";
 
 const SERVER = { name: "cline-jev-percent", version: "0.1.0" };
 const PROTOCOL = "2024-11-05";
@@ -29,6 +30,20 @@ const TOOL = {
     required: ["question", "options"],
   },
 };
+
+// Questions scored through this tool must reach the SAME audit trail as
+// hook-scored ones. The hook only ever sees the answer, and history pairs
+// intercept↔answer by question, so without these rows a pre-scored question
+// could never become context for the next one. session is unknown here (the
+// caller does not pass it), so the parent pid carries the identity — the hook
+// pairs id-less rows through it.
+const auditCtx = () => ({
+  session: null,
+  proc: `ppid:${process.ppid}`,
+  workspace: process.cwd(),
+  source: "mcp",
+  tool: TOOL.name,
+});
 
 function send(id, result) {
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
@@ -76,6 +91,7 @@ async function handle(msg) {
       return;
     }
     try {
+      await log({ event: "intercept", ...auditCtx(), question: args.question, options: args.options });
       const r = await scoreOptions({
         state: args.state || args.question,
         question: args.question,
@@ -88,10 +104,19 @@ async function handle(msg) {
         ...Object.entries(r.probabilities).map(([o, p]) => `${o}: ${(p * 100).toFixed(1)}%`),
         `enrichedOptions: ${JSON.stringify(Object.keys(r.probabilities).map((o) => `${o} (${(r.probabilities[o] * 100).toFixed(1)}%)`))}`,
       ];
+      // `state` is recorded verbatim — the trail shows exactly what Jev received.
+      await log({
+        event: "enriched",
+        ...auditCtx(),
+        question: args.question,
+        state: args.state || args.question,
+        enriched: Object.keys(r.probabilities).map((o) => `${o} (${(r.probabilities[o] * 100).toFixed(1)}%)`),
+      });
       sendToolText(id, lines.join("\n"));
     } catch (e) {
       // isError:true, not a JSON-RPC error: the model must SEE the failure and
       // can then ask the question unenriched instead of hanging on a dropped call.
+      await log({ event: "fail_open", ...auditCtx(), question: args.question, error: String(e?.message || e) });
       sendToolText(id, `Jev scoring unavailable: ${String(e?.message || e)}\nAsk the question without percentages.`, true);
     }
     return;
