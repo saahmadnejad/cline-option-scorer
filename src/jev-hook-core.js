@@ -449,6 +449,18 @@ function shapeOf(event) {
   };
 }
 
+// Cline reports these instead of a choice: the user closed the question (and
+// then often types the answer as chat text, which NO hook can see), or the tool
+// call failed schema validation (e.g. more than 5 options). They are not
+// decisions — recording them would put `chose: [User dismissed the question]`
+// into the next question's context.
+function nonAnswerReason(answer) {
+  const t = String(answer).trim();
+  if (/^\[User dismissed the question\]$/i.test(t)) return "dismissed";
+  if (/^✖/.test(t) || /^\{"?error"?\s*:/.test(t) || /^Error:/i.test(t)) return "tool_error";
+  return null;
+}
+
 // Fires AFTER ask_question/ask_followup_question completes. Observes only —
 // always responds {} so the tool result is never modified. The captured
 // question→answer pair is what the next PreToolUse scoring reads as history.
@@ -471,7 +483,12 @@ async function postMain() {
   const question = typeof input?.question === "string" ? input.question : "";
   const answer = extractAnswer(event);
   const ctx = { ...sessionInfo(event), workspace: workspaceRoot(event) };
-  if (answer && question) {
+  const dismissal = answer ? nonAnswerReason(answer) : null;
+  if (answer && dismissal) {
+    // Kept in the audit trail for visibility, but never as a decision: an
+    // unpaired/typed answer must not become the next question's context.
+    await log({ event: "answer_dismissed", ...ctx, source: "hook", tool: toolName, question, answer, reason: dismissal });
+  } else if (answer && question) {
     await log({ event: "answer", ...ctx, source: "hook", tool: toolName, question, answer });
   } else if (answer) {
     // The answer was captured but its question was not. History pairs are

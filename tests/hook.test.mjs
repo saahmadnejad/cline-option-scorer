@@ -13,7 +13,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -678,6 +678,50 @@ test("a question scored through MCP becomes history for the next hook-scored que
     assert.match(seen.state, /Recent decisions in this session:/, "history block present");
     assert.match(seen.state, new RegExp(`Q: .*MCP history source ${stamp}`), "the MCP-scored question is in context");
     assert.match(seen.state, new RegExp(`chose: ${answer}`), "with the answer the user chose");
+  } finally {
+    await stub.close();
+  }
+});
+
+// ---------- answers that are not choices (dismissed questions, tool errors) ----------
+
+test("a dismissed question is recorded, but never as a decision", async () => {
+  // Cline reports "[User dismissed the question]" when the user closes the
+  // question and answers in chat instead. That text is not a choice: recording
+  // it would put `chose: [User dismissed the question]` into history.
+  const stamp = Date.now();
+  const question = `Dismissed question ${stamp}?`;
+  await runPostHook(postPayload({ question, options: ["A", "B"] }, "[User dismissed the question]"));
+  const rows = trailRows();
+  const dismissed = rows.find((l) => l.event === "answer_dismissed" && l.question === question);
+  assert.ok(dismissed, "logged as answer_dismissed with the question kept");
+  assert.equal(dismissed.reason, "dismissed");
+  assert.ok(!rows.some((l) => l.event === "answer" && String(l.answer).includes("dismissed")), "never logged as a real answer");
+});
+
+test("a tool-schema failure is not recorded as a decision either", async () => {
+  const stamp = Date.now();
+  const question = `Invalid question ${stamp}?`;
+  await runPostHook(postPayload({ question, options: ["A", "B"] }, '{"error":"✖ Too big: expected array to have <=5 items   → at options"}'));
+  const row = trailRows().find((l) => l.event === "answer_dismissed" && l.question === question);
+  assert.ok(row, "logged as answer_dismissed");
+  assert.equal(row.reason, "tool_error");
+});
+
+test("the MCP tool refuses more than 5 options (Cline's limit) with an actionable message", async () => {
+  const dir = join(LOG_DIR, `mcp-limit-${Date.now()}`, "logs");
+  const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({})(body))));
+  const question = `Too many options ${Date.now()}?`;
+  try {
+    const { code, out } = await runMcp(
+      [mcpCall(1, { question, options: ["A", "B", "C", "D", "E", "F"] })],
+      { baseUrl: stub.url, logDir: dir }
+    );
+    assert.equal(code, 0);
+    assert.match(out, /at most 5/);
+    assert.match(out, /"isError":true/);
+    assert.equal(stub.calls.length, 0, "no Jev call for a question Cline would reject");
+    assert.ok(!existsSync(join(dir, "jev-hook.jsonl")), "nothing logged for an invalid question");
   } finally {
     await stub.close();
   }
