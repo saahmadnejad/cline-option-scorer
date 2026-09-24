@@ -1,0 +1,62 @@
+{
+  "name": "@donbee/cline-plugin-jev-percent",
+  "version": "0.3.0",
+  "description": "Add percentage to each Cline ask_question / ask_followup_question option using Jev 1.13",
+  "type": "module",
+  "main": "cline-plugin.js",
+  "bin": {
+    "cline-option-scorer": "src/cli.js",
+    "cline-option-scorer-install-hook": "scripts/install-hook.mjs"
+  },
+  "cline": {
+    "plugins": [
+      {
+        "paths": [
+          "./cline-plugin.js"
+        ],
+        "capabilities": [
+          "tools",
+          "hooks"
+        ]
+      }
+    ]
+  },
+  "peerDependencies": {
+    "@cline/sdk": "*"
+  },
+  "peerDependenciesMeta": {
+    "@cline/sdk": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "install:hook": "node scripts/install-hook.mjs",
+    "check": "node --check hooks/PreToolUse.cjs && node --check hooks/PostToolUse.cjs && node --check cline-plugin.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/cline-interceptor.js && node --check scripts/install-hook.mjs",
+    "test": "node --test tests/*.mjs",
+    "verify": "npm run check && npm test"
+  },
+  "files": [
+    "src/",
+    "hooks/",
+    "scripts/",
+    "skills/",
+    "cline-plugin.js",
+    "README.md",
+    ".clinerules",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cline",
+    "jev",
+    "typesafe",
+    "opencode-zen",
+    "choice",
+    "hook",
+    "plugin"
+  ],
+  "author": "donbee",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5"
+  }
+}
