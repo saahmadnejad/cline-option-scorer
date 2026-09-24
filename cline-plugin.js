@@ -77,13 +77,18 @@ const scoreTool = createTool({
     properties: {
       state: { type: "string", description: "Task context (what the user is doing). Defaults to question." },
       question: { type: "string", description: "The question you will ask the user." },
-      options: { type: "array", items: { type: "string" }, description: "2-8 option labels." },
+      options: { type: "array", items: { type: "string" }, description: "2-5 option labels (Cline's ask_followup_question rejects more than 5)." },
     },
     required: ["question", "options"],
   },
   execute: async (input) => {
     if (typeof input?.question !== "string" || !Array.isArray(input?.options) || input.options.length < 2) {
       throw new Error("score_cline_options needs a `question` string and at least 2 `options`");
+    }
+    // Cline's own schema caps ask_followup_question at 5 options; catch it here
+    // so the model fixes the question instead of composing one Cline rejects.
+    if (input.options.length > 5) {
+      throw new Error("`options` must have at most 5 labels - Cline's ask_followup_question rejects more. Merge or drop options and retry.");
     }
     const r = await scoreWithJev(input.state || input.question, input.question, input.options);
     return {

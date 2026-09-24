@@ -129,6 +129,25 @@ sqlite3 ~/.cline/data/logs/jev-hook.db \
   "SELECT ts, source, question FROM events WHERE source='mcp' ORDER BY id DESC LIMIT 5;"
 ```
 
+### Answering by typing instead of clicking
+
+Percentages belong to **options**, so two behaviours bypass scoring — by design,
+and now visibly:
+
+- **Dismissing a question** (closing `ask_followup_question`, then answering in
+  chat): no option was chosen, and hooks never see chat text — so the choice is
+  neither scored nor added to decision history. The audit trail records it once
+  as `answer_dismissed` so you can see what happened. Re-ask with options when
+  that decision should count.
+- **Prose questions** (the model asks in plain text, without the tool): there is
+  nothing to score, so no percentages appear.
+
+Keep questions inside the tool with **2–5 options**: Cline itself rejects more
+than five (`Too big: expected array to have <=5 items`), and the MCP tool now
+says so explicitly instead of letting the model compose an invalid question. For
+genuinely free-form answers, still offer 2–5 likely candidates — the user can
+always type over them.
+
 ### Uninstall
 
 ```bash

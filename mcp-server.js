@@ -20,7 +20,7 @@ const TOOL = {
     properties: {
       state: { type: "string", description: "Task context. Defaults to question." },
       question: { type: "string", description: "Question you will ask the user." },
-      options: { type: "array", items: { type: "string" }, description: "2-8 option labels." },
+      options: { type: "array", items: { type: "string" }, description: "2-5 option labels (Cline's ask_followup_question rejects more than 5)." },
       provider: {
         type: "string",
         enum: ["zen-free", "zen", "typesafe"],
@@ -62,6 +62,10 @@ function validate(args) {
   if (typeof args.question !== "string" || !args.question.trim()) return "`question` must be a non-empty string";
   if (!Array.isArray(args.options)) return "`options` must be an array of strings";
   if (args.options.length < 2) return "`options` needs at least 2 labels to be worth scoring";
+  // Cline's own schema caps ask_followup_question at 5 options ("Too big:
+  // expected array to have <=5 items"). Say so here, so the model fixes the
+  // question instead of composing one Cline will reject outright.
+  if (args.options.length > 5) return "`options` must have at most 5 labels - Cline's ask_followup_question rejects more. Merge or drop options and retry.";
   if (!args.options.every((o) => typeof o === "string" && o.trim())) return "every option must be a non-empty string";
   return null;
 }

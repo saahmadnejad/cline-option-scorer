@@ -1,5 +1,10 @@
 # Jev percentages for questions (cline-jev-percent)
 The `PreToolUse` hook appends Jev percentages to `ask_question`/`ask_followup_question` options automatically - do not fake or restate percentages yourself. If you want to know them BEFORE composing the question (or you are in a session without the hook), call `score_cline_options` (MCP or plugin tool) with state+question+options and use its `enrichedOptions` labels (e.g. `GitHub Actions (72.5%)`). Never invent percentages.
 
+## Ask with 2-5 options, never in prose
+Percentages attach to options: route every question through `ask_followup_question`/`ask_question` with 2-5 concrete options. Cline rejects more than 5 (`Too big: expected array to have <=5 items`) and a question asked as plain chat text cannot be scored or recorded as a decision. If the answer is genuinely free-form, still offer 2-5 likely candidates - the user can type over them.
+
+If the user dismisses the question and answers in chat, no hook can see that text: the decision is neither scored nor added to history (the trail records `answer_dismissed`). Re-ask it with options when the decision matters for later questions.
+
 ## Release hygiene
 Every feature/fix must be validated as a brand-new user would experience it, not as an upgrade: run `npm run verify && npm run smoke` before releasing. `smoke` packs the current tree and installs the tarball into a clean prefix with an empty `$HOME`, then walks the full README path — bins, hook installer, one real enrichment, JSONL + SQLite state (including the legacy-trail backfill), zero-config CLI, MCP handshake, uninstall. Never release on upgrade-in-place evidence alone.
