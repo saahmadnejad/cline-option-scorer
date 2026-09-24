@@ -16,7 +16,7 @@
 // Shape (all optional):
 //   { "provider": "zen-free|zen|typesafe", "model": "jev-1.13-free",
 //     "baseUrl": "https://…", "typesafeApiKey": "…", "opencodeApiKey": "…",
-//     "timeoutMs": 10000, "logDir": "~/.cline/data/logs" }
+//     "timeoutMs": 10000, "logDir": "~/.cline/data/logs", "autoAnswer": false }
 // Unknown keys are ignored so the file stays forward-compatible.
 //
 // CJS-safe: builtin access must not use static `import` (stripped in the
@@ -138,6 +138,10 @@ export function resolveConfig(overrides = {}, cwd) {
     // Which decisions count as context. "session" keeps concurrent Cline
     // sessions isolated; "workspace" shares within a project; "global" shares all.
     historyScope: o.historyScope ?? file.historyScope ?? DEFAULTS.historyScope,
+    // Answer without asking: use Jev's top option and tell the user what was
+    // chosen (CLI/MCP surfaces only — a PreToolUse hook cannot answer for the
+    // user, so the hook keeps showing enriched options).
+    autoAnswer: o.autoAnswer ?? file.autoAnswer ?? DEFAULTS.autoAnswer,
     // SQLite store (decision history). Default: <logDir>/jev-hook.db
     dbPath: o.dbPath ?? file.dbPath ?? null,
     _source: path, // which file contributed, or null — useful in --help / logs

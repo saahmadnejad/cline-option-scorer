@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Usage (installed: npm install -g @donbee/cline-option-scorer):
 //   cline-option-scorer --state "..." --question "..." --option "A" --option "B"
+//   cline-option-scorer --auto --question "..." --option "A" --option "B"   # pick Jev's top option, print what was chosen
 //   cline-option-scorer --cline-xml "<ask_followup_question>…"   # or --cline-file / stdin
-import { scoreOptions, printResult } from './jev-client.js';
+import { scoreOptions, printResult, autoDecisionLine } from './jev-client.js';
 import { interceptClineAsk, parseClineAsk } from './cline-interceptor.js';
+import { resolveConfig } from './jev-config.js';
 import fs from 'node:fs';
 
 function arg(name, def = null) {
@@ -58,8 +60,11 @@ if (!options.length) {
 }
 
 try {
+  const auto = process.argv.includes("--auto") || resolveConfig().autoAnswer === true;
   const result = await scoreOptions({ state, question, options, provider, model });
   printResult(question, result);
+  // Default off: without asking the user, say plainly what was decided.
+  if (auto) console.log(`\n${autoDecisionLine(question, result)}`);
 } catch (e) {
   // offline / no key fallback: equal split so installer works on any system
   console.error(`[warn] ${e.message}\n[mock] equal split:`);

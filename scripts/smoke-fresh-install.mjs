@@ -126,6 +126,9 @@ mcpSend({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion
 mcpSend({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
 const mcpQ = `Smoke MCP scoring works? ${Date.now()}`;
 mcpSend({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "score_cline_options", arguments: { state: "smoke context", question: mcpQ, options: ["yes", "no"] } } });
+// autoAnswer is opt-in: the same call with the flag must say DO NOT ASK and
+// record the decision, so a brand-new install proves the whole feature.
+mcpSend({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "score_cline_options", arguments: { state: "smoke context", question: mcpQ, options: ["yes", "no"], autoAnswer: true } } });
 mcp.stdin.end();
 const mcpCode = await new Promise((res) => {
   const t = setTimeout(() => { mcp.kill(); res(-1); }, 30_000);
@@ -135,12 +138,16 @@ ok(mcpCode === 0 && /"name"\s*:\s*"(score_cline_options|jev-percent)"/.test(mcpO
 ok(/enrichedOptions/.test(mcpOut), "MCP server returns enriched option labels", mcpOut.slice(-300));
 const mcpRows = readFileSync(join(logs, "jev-hook.jsonl"), "utf8").trim().split("\n")
   .map((l) => JSON.parse(l)).filter((e) => e.question === mcpQ);
+const mcpSeq = mcpRows.map((e) => `${e.event}/${e.source}`).join(",");
 ok(
-  mcpRows.map((e) => `${e.event}/${e.source}`).join(",") === "intercept/mcp,enriched/mcp",
+  mcpSeq.includes("intercept/mcp,enriched/mcp"),
   "MCP-scored questions reach the audit trail (source mcp)",
   JSON.stringify(mcpRows.map((e) => [e.event, e.source]))
 );
 ok(typeof mcpRows.find((e) => e.event === "enriched")?.state === "string", "MCP enriched row records the state sent to Jev");
+const mcpAuto = mcpRows.find((e) => e.event === "enriched" && typeof e.reason === "string" && e.reason.startsWith("auto_answer: "));
+ok(typeof mcpAuto?.reason === "string", "autoAnswer records the decision on the audit row", JSON.stringify(mcpRows.slice(-2)));
+ok(/DO NOT ask the user/.test(mcpOut), "autoAnswer response carries the skip-asking directive");
 
 // 9) README uninstall — the three files go away
 for (const f of ["PreToolUse.cjs", "PostToolUse.cjs", "jev-hook-lib.cjs"]) rmSync(join(hooks, f), { force: true });

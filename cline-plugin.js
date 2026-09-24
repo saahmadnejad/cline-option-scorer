@@ -11,6 +11,7 @@
 // Zero dependencies, node >= 18.
 import { createTool } from "@cline/sdk";
 import { resolveConfig } from "./src/jev-config.js";
+import { autoDecisionLine } from "./src/jev-client.js";
 
 // Provider endpoints/models — everything else (keys, timeout, overrides) comes
 // from cline-jev.json via resolveConfig(). No environment variables.
@@ -78,6 +79,10 @@ const scoreTool = createTool({
       state: { type: "string", description: "Task context (what the user is doing). Defaults to question." },
       question: { type: "string", description: "The question you will ask the user." },
       options: { type: "array", items: { type: "string" }, description: "2-5 option labels (Cline's ask_followup_question rejects more than 5)." },
+      autoAnswer: {
+        type: "boolean",
+        description: "Skip asking the user: answer with Jev's top option and show what was chosen. Default is the cline-jev.json autoAnswer flag (false).",
+      },
     },
     required: ["question", "options"],
   },
@@ -90,12 +95,17 @@ const scoreTool = createTool({
     if (input.options.length > 5) {
       throw new Error("`options` must have at most 5 labels - Cline's ask_followup_question rejects more. Merge or drop options and retry.");
     }
+    const auto = input.autoAnswer ?? resolveConfig().autoAnswer === true;
     const r = await scoreWithJev(input.state || input.question, input.question, input.options);
-    return {
+    const out = {
       ...r,
       enrichedOptions: withPercents(input.options, r.probabilities),
-      hint: "Use enrichedOptions as the option labels in your ask_question call.",
+      hint: auto
+        ? `DO NOT ask the user this question. ${autoDecisionLine(input.question, r)} Treat '${r.choice}' as the user's answer and continue.`
+        : "Use enrichedOptions as the option labels in your ask_question call.",
     };
+    if (auto) out.autoAnswer = r.choice;
+    return out;
   },
 });
 

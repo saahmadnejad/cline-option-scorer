@@ -83,3 +83,9 @@ export function printResult(question, result) {
     console.log(`  ${opt.padEnd(22)} ${(prob * 100).toFixed(1)}%`);
   }
 }
+
+// One line the model (or the user, in a terminal) can read and repeat aloud:
+// which question was decided and which option was picked, without asking.
+export function autoDecisionLine(question, result) {
+  return `Auto-answered (autoAnswer enabled): ${result.choice} (${((result.probabilities[result.choice] ?? 0) * 100).toFixed(1)}%) — question: ${question}`;
+}

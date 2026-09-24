@@ -756,3 +756,61 @@ test("the installer also drops the prompt-steering skill and rules into a real .
   assert.ok(existsSync(join(fakeHome, ".cline", "hooks", "PreToolUse.cjs")));
 });
 
+test("MCP autoAnswer: the directive names the winner and the audit row records it", async () => {
+  // Default off everywhere: without the flag the same call must NOT ask to skip.
+  const dir = join(LOG_DIR, `mcp-auto-${Date.now()}`, "logs");
+  const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({ A: 0.8, B: 0.2 })(body))));
+  const question = `MCP auto-answer ${Date.now()}?`;
+  try {
+    const { code, out } = await runMcp(
+      [mcpCall(1, { question, options: ["A", "B"], autoAnswer: true })],
+      { baseUrl: stub.url, logDir: dir }
+    );
+    assert.equal(code, 0);
+    assert.match(out, /DO NOT ask the user this question/, "a skip-asking directive, not just scores");
+    assert.match(out, /Auto-answered \(autoAnswer enabled\): A \(80\.0%\) — question: /, "which option, with its percentage, and which question");
+    assert.match(out, /Treat 'A' as the user's answer/, "the exact label the model must act on");
+    const rows = readFileSync(join(dir, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const enriched = rows.find((r) => r.event === "enriched" && r.source === "mcp");
+    assert.ok(enriched, "decision recorded on the enriched row");
+    assert.equal(enriched.reason, "auto_answer: A", "the audit row says what was decided");
+  } finally {
+    await stub.close();
+  }
+});
+
+test("MCP without autoAnswer shows scores only, never a skip-asking directive", async () => {
+  const dir = join(LOG_DIR, `mcp-manual-${Date.now()}`, "logs");
+  const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({ A: 0.8, B: 0.2 })(body))));
+  const question = `MCP no auto-answer ${Date.now()}?`;
+  try {
+    const { out } = await runMcp([mcpCall(1, { question, options: ["A", "B"] })], {
+      baseUrl: stub.url,
+      logDir: dir,
+    });
+    assert.match(out, /enrichedOptions/);
+    assert.ok(!out.includes("DO NOT ask"), "default off: scores only, user still decides");
+    const rows = readFileSync(join(dir, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const enriched = rows.find((r) => r.event === "enriched");
+    assert.ok(enriched && enriched.reason == null, "no auto_answer reason recorded");
+  } finally {
+    await stub.close();
+  }
+});
+
+test("MCP file-level autoAnswer:true applies without a per-call flag", async () => {
+  const dir = join(LOG_DIR, `mcp-auto-file-${Date.now()}`, "logs");
+  const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer({ A: 0.8, B: 0.2 })(body))));
+  const question = `MCP file auto-answer ${Date.now()}?`;
+  try {
+    const { out } = await runMcp([mcpCall(1, { question, options: ["A", "B"] })], {
+      baseUrl: stub.url,
+      logDir: dir,
+      autoAnswer: true, // lands in cline-jev.json of the throwaway project dir
+    });
+    assert.match(out, /DO NOT ask the user this question/, "file flag alone enables it");
+  } finally {
+    await stub.close();
+  }
+});
+

@@ -17,6 +17,19 @@ is not installed), call the tool first:
    The hook detects labels that already end in `(xx%)` and passes them through untouched, so this never double-tags.
 3. Never invent percentages — only show numbers returned by the tool or the hook.
 
+## Auto-answer mode (opt-in)
+
+`cline-jev.json` may set `"autoAnswer": true` (default `false`). The model may
+also pass `autoAnswer: true` on a single `score_cline_options` call. Either
+one means: do NOT ask the user this question — the tool returns Jev's top
+option along with an explicit directive to treat it as the user's answer and
+continue. The directive names the exact winner, so the choice stays visible;
+the trail records the decision on the `enriched` row.
+
+The PreToolUse hook never auto-answers: it keeps appending percentages for the
+user to pick. Auto-answer only ever happens where a model (or the user, on the
+CLI with `--auto`) consumes the tool output.
+
 ## Ask with options, never in prose
 
 Percentages attach to **options**. A question written as plain chat text has

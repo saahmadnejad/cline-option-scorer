@@ -3,8 +3,9 @@
 // Exposes `score_cline_options` so Cline (CLI + VSCode extension) can score
 // ask_followup_question options with Jev 1.13 BEFORE asking the user.
 // Transport: newline-delimited JSON-RPC 2.0 over stdio.
-import { scoreOptions } from "./src/jev-client.js";
+import { scoreOptions, autoDecisionLine } from "./src/jev-client.js";
 import { log } from "./src/jev-hook-core.js";
+import { resolveConfig } from "./src/jev-config.js";
 
 const SERVER = { name: "cline-jev-percent", version: "0.1.0" };
 const PROTOCOL = "2024-11-05";
@@ -21,6 +22,10 @@ const TOOL = {
       state: { type: "string", description: "Task context. Defaults to question." },
       question: { type: "string", description: "Question you will ask the user." },
       options: { type: "array", items: { type: "string" }, description: "2-5 option labels (Cline's ask_followup_question rejects more than 5)." },
+      autoAnswer: {
+        type: "boolean",
+        description: "Skip asking the user: answer with Jev's top option and show what was chosen. Default is the cline-jev.json autoAnswer flag (false).",
+      },
       provider: {
         type: "string",
         enum: ["zen-free", "zen", "typesafe"],
@@ -96,6 +101,7 @@ async function handle(msg) {
     }
     try {
       await log({ event: "intercept", ...auditCtx(), question: args.question, options: args.options });
+      const auto = args.autoAnswer ?? resolveConfig().autoAnswer === true;
       const r = await scoreOptions({
         state: args.state || args.question,
         question: args.question,
@@ -108,6 +114,12 @@ async function handle(msg) {
         ...Object.entries(r.probabilities).map(([o, p]) => `${o}: ${(p * 100).toFixed(1)}%`),
         `enrichedOptions: ${JSON.stringify(Object.keys(r.probabilities).map((o) => `${o} (${(r.probabilities[o] * 100).toFixed(1)}%)`))}`,
       ];
+      if (auto) {
+        // The choice must be impossible to miss or to confuse with a score
+        // table: it is a directive to skip the ask tool, with the exact option
+        // text the model must act on instead of showing the user options.
+        lines.push(`DO NOT ask the user this question. ${autoDecisionLine(args.question, r)} Treat '${r.choice}' as the user's answer and continue.`);
+      }
       // `state` is recorded verbatim — the trail shows exactly what Jev received.
       await log({
         event: "enriched",
@@ -115,6 +127,7 @@ async function handle(msg) {
         question: args.question,
         state: args.state || args.question,
         enriched: Object.keys(r.probabilities).map((o) => `${o} (${(r.probabilities[o] * 100).toFixed(1)}%)`),
+        ...(auto ? { reason: `auto_answer: ${r.choice}` } : {}),
       });
       sendToolText(id, lines.join("\n"));
     } catch (e) {

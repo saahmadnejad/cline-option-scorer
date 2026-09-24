@@ -102,6 +102,7 @@ exists (project root beats home):
 | `maxStateChars` | `2000` | Hard cap for the whole `state` payload |
 | `historyScope` | `session` | Which decisions count as context: `session` (isolates concurrent Cline sessions), `workspace` (shares within a project), `global` (shares everything) |
 | `dbPath` | `<logDir>/jev-hook.db` | Where the SQLite decision store lives |
+| `autoAnswer` | `false` | **Opt-in only:** skip asking and take Jev's top option — CLI with `--auto` or per-call/file flag on the MCP tool. Always names the chosen option (`Auto-answered (autoAnswer enabled): …`), records it on the audit row, and feeds it into decision history. The PreToolUse hook never auto-answers: it keeps showing enriched options |
 
 Every key is optional — with no file at all you get the anonymous free model.
 Explicit CLI flags / tool arguments always win over the file.
@@ -152,6 +153,30 @@ than five (`Too big: expected array to have <=5 items`), and the MCP tool now
 says so explicitly instead of letting the model compose an invalid question. For
 genuinely free-form answers, still offer 2–5 likely candidates — the user can
 always type over them.
+
+### Auto-answer (opt-in, default off)
+
+Set `"autoAnswer": true` in `cline-jev.json` (or pass `autoAnswer: true` on one
+`score_cline_options` call, or `--auto` on the CLI) and the top option is taken
+without asking. The choice is always named, never silent:
+
+```
+Auto-answered (autoAnswer enabled): GitHub Actions (72.5%) — question: Which CI/CD platform should we integrate?
+```
+
+- MCP / plugin tool: the response carries that line inside a DO-NOT-ASK
+  directive, so the model treats the winner as the user's answer and continues.
+- CLI: prints the scores, then the decision line.
+- Audit + history: the decision is recorded on the `enriched` row and becomes
+  context for later questions like any chosen answer.
+- The PreToolUse hook never auto-answers: it keeps appending percentages for
+  the user to pick. Model-side only, each question is independent — no blanket
+  "answer everything for me" mode is persisted anywhere.
+
+```bash
+sqlite3 ~/.cline/data/logs/jev-hook.db \
+  "SELECT ts, question, reason FROM events WHERE event='enriched' AND reason LIKE 'auto_answer:%' ORDER BY id DESC LIMIT 5;"
+```
 
 ### Uninstall
 
