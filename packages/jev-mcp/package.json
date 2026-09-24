@@ -1,0 +1,35 @@
+{
+  "name": "@donbee/jev-mcp",
+  "version": "0.3.0",
+  "description": "General-purpose MCP server and CLI to score option probabilities using Jev 1.13",
+  "type": "module",
+  "main": "src/jev-client.js",
+  "bin": {
+    "jev-option-scorer": "src/cli.js",
+    "jev-mcp": "src/mcp-server.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node --test tests/*.mjs",
+    "check": "node --check src/mcp-server.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/jev-config.js"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "jev",
+    "mcp",
+    "model-context-protocol",
+    "typesafe",
+    "opencode-zen",
+    "probabilities",
+    "decision-making"
+  ],
+  "author": "donbee",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
