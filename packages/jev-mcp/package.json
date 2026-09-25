@@ -11,7 +11,10 @@
   "scripts": {
     "start": "node src/cli.js",
     "test": "node --test tests/*.mjs",
-    "check": "node --check src/mcp-server.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/jev-config.js"
+    "check": "node --check src/mcp-server.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/jev-config.js && node --check scripts/smoke-fresh-install.mjs",
+    "smoke": "node scripts/smoke-fresh-install.mjs",
+    "verify": "npm run check && npm test",
+    "prepublishOnly": "npm run verify && npm run smoke"
   },
   "files": [
     "src/",

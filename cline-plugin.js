@@ -22,9 +22,18 @@ const PROVIDERS = {
 };
 const QUESTION_TOOLS = /^ask_(question|followup_question)$/i;
 
-function slug(s) {
-  const sl = String(s).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-  return (sl || "option").slice(0, 40);
+// Criterion IDs are positional (`opt_0`, `opt_1`, …) and `criteria` doubles as
+// the ID → label map that decodes the response. Labels are arbitrary text, so
+// deriving the ID from the label is lossy: "A & B" and "A-B" both normalize to
+// `a_b`, and two labels sharing their first 40 characters truncate to the same
+// key — either way one option overwrites the other and the wrong option gets
+// the probability.
+function buildCriteria(options) {
+  const criteria = {};
+  options.forEach((opt, i) => {
+    criteria[`opt_${i}`] = opt;
+  });
+  return criteria;
 }
 const hasPct = (s) => /\(\d+(\.\d+)?%\)\s*$/.test(String(s));
 const withPercents = (options, probabilities) =>
@@ -33,8 +42,7 @@ const withPercents = (options, probabilities) =>
 async function scoreWithJev(state, question, options) {
   const cfg = resolveConfig();
   const known = PROVIDERS[cfg.provider] || PROVIDERS["zen-free"];
-  const criteria = {};
-  for (const opt of options) criteria[slug(opt)] = opt;
+  const criteria = buildCriteria(options);
   const headers = { "Content-Type": "application/json" };
   const key = cfg.opencodeApiKey || cfg.typesafeApiKey;
   if (key) headers.Authorization = `Bearer ${key}`; // zen-free works anonymously
@@ -60,9 +68,9 @@ async function scoreWithJev(state, question, options) {
   const ans = json.answers?.pick;
   if (!ans?.probabilities) throw new Error(`Bad Jev response: ${text.slice(0, 300)}`);
   const probabilities = {};
-  for (const opt of options) probabilities[opt] = ans.probabilities[slug(opt)] ?? 0;
-  // `ans.choice` is a criterion SLUG - map it back to the original label.
-  const choice = options.find((o) => slug(o) === ans.choice) ?? ans.choice;
+  for (const [id, opt] of Object.entries(criteria)) probabilities[opt] = ans.probabilities[id] ?? 0;
+  // `ans.choice` is a criterion ID - decode it back to the original label.
+  const choice = criteria[ans.choice] ?? ans.choice;
   return { choice, probabilities, confidence: ans.confidence ?? 0, model: json.model };
 }
 

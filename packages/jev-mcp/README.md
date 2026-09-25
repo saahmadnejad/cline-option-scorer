@@ -44,8 +44,20 @@ Add an MCP STDIO server:
 - Args: `["-y", "@donbee/jev-mcp"]`
 
 ### CLI Usage
+
+The package has two bins (`jev-mcp` for the stdio server and
+`jev-option-scorer` for the CLI). Running `npx @donbee/jev-mcp` starts the MCP
+server (it reads JSON-RPC from stdin), so name the CLI bin explicitly:
+
 ```bash
-npx @donbee/jev-mcp --question "Which database?" --option "PostgreSQL" --option "SQLite" --option "Redis"
+npx -y -p @donbee/jev-mcp jev-option-scorer --question "Which database?" --option "PostgreSQL" --option "SQLite" --option "Redis"
+```
+
+Or install it globally:
+
+```bash
+npm install -g @donbee/jev-mcp
+jev-option-scorer --question "Which database?" --option "PostgreSQL" --option "SQLite" --option "Redis"
 ```
 
 ## Tools Exposed

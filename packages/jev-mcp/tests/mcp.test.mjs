@@ -10,31 +10,41 @@ import { tmpdir } from "node:os";
 const here = dirname(fileURLToPath(import.meta.url));
 const MCP_SERVER = join(here, "..", "src", "mcp-server.js");
 
+// Parse the JSON request body before invoking the handler: `jevAnswer` echoes
+// per-criterion-ID probabilities, so it must see the real `criteria` map.
 function startStub(handler) {
   return new Promise((resolve) => {
-    const s = createServer(handler);
+    const s = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => handler(JSON.parse(raw || "{}"), res));
+    });
     s.listen(0, "127.0.0.1", () => resolve({ url: `http://127.0.0.1:${s.address().port}`, close: () => new Promise((res) => s.close(res)) }));
   });
 }
 
+// Mirrors the real API contract: response probabilities/choice are keyed by
+// whatever criterion IDs appear in the REQUEST's `criteria` map (not the label
+// text), so the stub echoes per-ID probabilities derived from the labels.
 function jevAnswer(probabilities) {
-  const sum = Object.values(probabilities).reduce((a, b) => a + b, 0);
-  const normalized = {};
-  for (const [k, v] of Object.entries(probabilities)) {
-    const slug = k.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
-    normalized[slug] = v / sum;
-  }
-  const topSlug = Object.entries(normalized).sort((a, b) => b[1] - a[1])[0][0];
-  return (body) => ({
-    model: "jev-1.13-free",
-    answers: {
-      pick: {
-        choice: topSlug,
-        confidence: normalized[topSlug],
-        probabilities: normalized,
+  return (body) => {
+    const criteria = body?.questions?.pick?.criteria ?? {};
+    const entries = Object.entries(criteria); // [id, label]
+    const sum = entries.reduce((acc, [, label]) => acc + (probabilities[label] ?? 0), 0) || 1;
+    const mapped = {};
+    for (const [id, label] of entries) mapped[id] = (probabilities[label] ?? 0) / sum;
+    const top = entries.slice().sort((a, b) => mapped[b[0]] - mapped[a[0]])[0];
+    return {
+      model: "jev-1.13-free",
+      answers: {
+        pick: {
+          choice: top?.[0] ?? "none",
+          confidence: top ? mapped[top[0]] : 0,
+          probabilities: mapped,
+        },
       },
-    },
-  });
+    };
+  };
 }
 
 function runMcp(frames, cfg = {}) {
@@ -90,3 +100,31 @@ test("MCP autoAnswer returns DO NOT ASK directive with chosen winner", async () 
     await stub.close();
   }
 });
+
+// Regression: labels colliding under the old slug derivation ("A & B" and
+// "A-B" both became `a_b`; labels sharing their first 40 characters truncated
+// to the same key) overwrote each other in `criteria`, so one option absorbed
+// the other's probability. Criterion IDs must stay positional for any label.
+test("MCP keeps colliding and over-length labels distinct", async () => {
+  const longA = `${"x".repeat(40)} A`;
+  const longB = `${"x".repeat(40)} B`;
+  const options = ["A & B", "A-B", longA, longB];
+  let seenCriteria = null;
+  const stub = await startStub((body, res) => {
+    seenCriteria = body.questions.pick.criteria;
+    res.end(JSON.stringify(jevAnswer({ "A & B": 0.4, "A-B": 0.3, [longA]: 0.2, [longB]: 0.1 })(body)));
+  });
+  try {
+    const { code, out } = await runMcp([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "score_options", arguments: { question: "Q?", options } } },
+    ], { baseUrl: stub.url });
+    assert.equal(code, 0);
+    assert.deepEqual(seenCriteria, { opt_0: "A & B", opt_1: "A-B", opt_2: longA, opt_3: longB });
+    for (const [label, pct] of [["A & B", "40.0"], ["A-B", "30.0"], [longA, "20.0"], [longB, "10.0"]]) {
+      assert.ok(out.includes(`${label} (${pct}%)`), `expected ${label} (${pct}%) in ${out.slice(-400)}`);
+    }
+  } finally {
+    await stub.close();
+  }
+});
+

@@ -72,16 +72,17 @@ async function startStub(handler) {
   return base;
 }
 
-// Echo back a probability per criterion SLUG, exactly like real Jev does:
-// `answers.pick.probabilities` is keyed by the criterion keys (slugs), not by
-// the label text - which is why the hook looks up `probabilities[slug(option)]`.
+// Echo back a probability per criterion ID, exactly like real Jev does:
+// `answers.pick.probabilities` is keyed by the criterion IDs (e.g. `opt_0`),
+// not by the label text - which is why the hook looks up
+// `probabilities[criteria-id]`.
 function jevAnswer(probabilities) {
   return (body) => {
     const criteria = body?.questions?.pick?.criteria ?? {};
     const mapped = {};
-    for (const [slug, label] of Object.entries(criteria)) mapped[slug] = probabilities[label] ?? 0;
-    const firstSlug = Object.keys(criteria)[0];
-    return { model: "stub-jev", answers: { pick: { choice: firstSlug, probabilities: mapped, confidence: 0.9 } } };
+    for (const [id, label] of Object.entries(criteria)) mapped[id] = probabilities[label] ?? 0;
+    const firstId = Object.keys(criteria)[0];
+    return { model: "stub-jev", answers: { pick: { choice: firstId, probabilities: mapped, confidence: 0.9 } } };
   };
 }
 
@@ -268,7 +269,7 @@ test("fails open when Jev hangs past the configured timeoutMs", async () => {
   }
 });
 
-test("unknown option slugs score 0.0% instead of NaN", async () => {
+test("unknown criterion IDs score 0.0% instead of NaN", async () => {
   const stub = await startStub((_body, res) =>
     res.end(
       JSON.stringify({
@@ -283,6 +284,46 @@ test("unknown option slugs score 0.0% instead of NaN", async () => {
     });
     assert.deepEqual(parse(out).overrideInput.options, ["Known (0.0%)", "Missing (0.0%)"]);
     assert.ok(!out.includes("NaN"));
+  } finally {
+    await stub.close();
+  }
+});
+
+// Regression: labels that collide under the old slug derivation ("A & B" and
+// "A-B" both became `a_b`, as did labels sharing their first 40 characters)
+// overwrote each other in `criteria`, so one option absorbed the other's
+// probability. Criterion IDs must stay distinct for ANY label text.
+test("colliding or over-length labels keep their own probabilities", async () => {
+  const longA = `${"x".repeat(40)} A`;
+  const longB = `${"x".repeat(40)} B`;
+  const stub = await startStub((body, res) => {
+    const criteria = body.questions.pick.criteria;
+    assert.deepEqual(Object.keys(criteria), ["opt_0", "opt_1", "opt_2", "opt_3"], "IDs are positional, never label-derived");
+    assert.deepEqual(Object.values(criteria), ["A & B", "A-B", longA, longB]);
+    res.end(
+      JSON.stringify({
+        model: "stub-jev",
+        answers: {
+          pick: {
+            choice: "opt_0",
+            probabilities: { opt_0: 0.4, opt_1: 0.3, opt_2: 0.2, opt_3: 0.1 },
+            confidence: 0.4,
+          },
+        },
+      })
+    );
+  });
+  try {
+    const { out } = await runHook(
+      realPayload({ question: "Pick", options: ["A & B", "A-B", longA, longB] }),
+      { baseUrl: stub.url }
+    );
+    assert.deepEqual(parse(out).overrideInput.options, [
+      "A & B (40.0%)",
+      "A-B (30.0%)",
+      `${longA} (20.0%)`,
+      `${longB} (10.0%)`,
+    ]);
   } finally {
     await stub.close();
   }
