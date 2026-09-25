@@ -1,0 +1,36 @@
+name: CI
+
+# Review-time gate. The split into packages/ left ~1600 lines of hand-maintained
+# copies; `npm run verify` chains every package's checks, including the drift
+# guard in tests/copies.test.mjs that fails if one copy is edited without the
+# other. Catching that here beats discovering it at release time.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          # No `registry-url`: the CI job publishes nothing, and a blank
+          # _authToken in .npmrc is worse than none.
+          package-manager-cache: npm
+
+      - run: npm ci
+
+      - name: Verify (root + both packages)
+        run: npm run verify
+
+      - name: Drift guard (explicit, for a readable failure)
+        run: node --test tests/copies.test.mjs
+
+      # `npm run smoke` is deliberately NOT run here: it installs real tarballs
+      # and makes live calls to the free Jev endpoint, which is flaky and slow in
+      # CI. The release workflow runs it before publishing, per .clinerules.

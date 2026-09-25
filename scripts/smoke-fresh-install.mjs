@@ -40,6 +40,16 @@ const run = (cmd, args, env = {}) => {
   return { status: r.status, out: `${r.stdout || ""}${r.stderr || ""}` };
 };
 
+// Steps 5-8 talk to the real free endpoint, which occasionally takes longer than
+// the hook's 10s timeoutMs. That fails the hook open and costs four assertions
+// with a message that reads like a regression but is really one slow call, and
+// it aborts the chain before the package smokes. So those steps are DECLARED
+// here, retried once, and only then asserted - still real end-to-end calls, just
+// not hostage to a single hiccup.
+const LIVE_ATTEMPTS = 3;
+const liveChecks = [];
+const liveCheck = (label, fn) => liveChecks.push([label, fn]);
+
 console.log(`[smoke] node ${process.versions.node}, packing ${pkg.name}@${pkg.version} …`);
 mkdirSync(work, { recursive: true });
 
@@ -84,23 +94,78 @@ ok(/2-5/.test(readFileSync(skillFile, "utf8")), "installed skill states the 2-5 
 ok(/dismiss/i.test(readFileSync(skillFile, "utf8")), "installed skill explains typed/dismissed answers");
 
 // 5) one real enrichment through the installed hook (anonymous free model)
-const q = `Smoke: fresh install works end to end? ${Date.now()}`;
-const payload = JSON.stringify({
-  hookName: "tool_call",
-  preToolUse: { toolName: "ask_question", parameters: { question: q, options: ["works", "broken"] } },
-  tool_call: { name: "ask_question", input: { question: q, options: ["works", "broken"] } },
+let q = "";
+let hookRun = { status: 1, stdout: "", stderr: "" };
+liveCheck("hook enrichment", () => {
+  q = `Smoke: fresh install works end to end? ${Date.now()}`;
+  hookRun = spawnSync(NODE, [join(hooks, "PreToolUse.cjs")], {
+    input: JSON.stringify({
+      hookName: "tool_call",
+      preToolUse: { toolName: "ask_question", parameters: { question: q, options: ["works", "broken"] } },
+      tool_call: { name: "ask_question", input: { question: q, options: ["works", "broken"] } },
+    }),
+    encoding: "utf8", env: { ...process.env, HOME: home }, cwd: work, timeout: 90_000,
+  });
+  return hookRun.status === 0 && /"cancel":false/.test(hookRun.stdout || "");
 });
-const hookRun = spawnSync(NODE, [join(hooks, "PreToolUse.cjs")], {
-  input: payload, encoding: "utf8", env: { ...process.env, HOME: home }, cwd: work, timeout: 90_000,
+
+// 7) zero-config CLI - README's first global-install example
+let cli = { status: 1, out: "" };
+liveCheck("CLI", () => {
+  cli = run(join(bins, "cline-option-scorer"), ["--question", "Smoke CLI works?", "--option", "yes", "--option", "no"], { HOME: home });
+  return cli.status === 0 && /%/.test(cli.out);
 });
+
+// 8) MCP server: handshake + scoring calls that must reach the audit trail.
+// autoAnswer is opt-in: the same call with the flag must say DO NOT ASK and
+// record the decision, so a brand-new install proves the whole feature.
+let mcpCode = -1;
+let mcpOut = "";
+let mcpQ = "";
+liveCheck("MCP", async () => {
+  mcpQ = `Smoke MCP scoring works? ${Date.now()}`;
+  const mcp = spawn(NODE, [join(prefix, "node_modules", pkg.name, "mcp-server.js")], {
+    env: { ...process.env, HOME: home }, cwd: work, stdio: ["pipe", "pipe", "pipe"],
+  });
+  mcpOut = "";
+  mcp.stdout.on("data", (c) => (mcpOut += c));
+  const send = (msg) => mcp.stdin.write(JSON.stringify(msg) + "\n");
+  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } });
+  send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+  send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "score_cline_options", arguments: { state: "smoke context", question: mcpQ, options: ["yes", "no"] } } });
+  send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "score_cline_options", arguments: { state: "smoke context", question: mcpQ, options: ["yes", "no"], autoAnswer: true } } });
+  mcp.stdin.end();
+  mcpCode = await new Promise((res) => {
+    const t = setTimeout(() => { mcp.kill(); res(-1); }, 30_000);
+    mcp.on("close", (c) => { clearTimeout(t); res(c); });
+  });
+  return mcpCode === 0 && /enrichedOptions/.test(mcpOut);
+});
+
+// Run the live checks, one retry each, then assert in detail below.
+// Three attempts, not one: the free endpoint intermittently needs longer than
+// the 10s default timeout, and a single hiccup must not fail a release. Still
+// fully zero-config - the alternative (seeding a config file with a bigger
+// timeoutMs) would stop these checks proving the zero-config path.
+for (const [label, fn] of liveChecks) {
+  let pass = false;
+  for (let attempt = 1; attempt <= LIVE_ATTEMPTS && !pass; attempt++) {
+    if (attempt > 1) {
+      console.log(`  ...  retrying "${label}" (attempt ${attempt}/${LIVE_ATTEMPTS}; the free endpoint is occasionally slow)`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    pass = await fn();
+  }
+}
+
 ok(hookRun.status === 0, "PreToolUse exits 0", (hookRun.stderr || "").slice(-300));
 ok(/"cancel":false/.test(hookRun.stdout || ""), "hook enriches and allows the question");
 ok(/\(\d+\.?\d*%\)/.test(hookRun.stdout || ""), "percentages present in override");
 
 // 6) audit trail: JSONL + SQLite, live row AND backfilled legacy row
 const trail = readFileSync(join(logs, "jev-hook.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-const live = trail.find((e) => e.event === "enriched" && e.question === q);
-ok(typeof live?.state === "string" && live.state.includes(q), "JSONL enriched row records the state");
+const hookRow = trail.find((e) => e.event === "enriched" && e.question === q);
+ok(typeof hookRow?.state === "string" && hookRow.state.includes(q), "JSONL enriched row records the state");
 const { DatabaseSync } = await import("node:sqlite");
 const d = new DatabaseSync(join(logs, "jev-hook.db"));
 const cols = d.prepare("SELECT COUNT(*) n FROM pragma_table_info('events') WHERE name='state'").get().n;
@@ -111,31 +176,11 @@ const dbLegacy = d.prepare("SELECT state FROM events WHERE event='enriched' AND 
 ok(typeof dbLegacy?.state === "string", "backfilled legacy row keeps its state");
 d.close();
 
-// 7) zero-config CLI — README's first global-install example
-const cli = run(join(bins, "cline-option-scorer"), ["--question", "Smoke CLI works?", "--option", "yes", "--option", "no"], { HOME: home });
 ok(cli.status === 0 && /%/.test(cli.out), "zero-config CLI scores with percentages", cli.out.slice(-300));
 
-// 8) MCP server: handshake + one real scoring call that must reach the audit trail
-const mcp = spawn(NODE, [join(prefix, "node_modules", pkg.name, "mcp-server.js")], {
-  env: { ...process.env, HOME: home }, cwd: work, stdio: ["pipe", "pipe", "pipe"],
-});
-let mcpOut = "";
-mcp.stdout.on("data", (c) => (mcpOut += c));
-const mcpSend = (msg) => mcp.stdin.write(JSON.stringify(msg) + "\n");
-mcpSend({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } });
-mcpSend({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
-const mcpQ = `Smoke MCP scoring works? ${Date.now()}`;
-mcpSend({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "score_cline_options", arguments: { state: "smoke context", question: mcpQ, options: ["yes", "no"] } } });
-// autoAnswer is opt-in: the same call with the flag must say DO NOT ASK and
-// record the decision, so a brand-new install proves the whole feature.
-mcpSend({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "score_cline_options", arguments: { state: "smoke context", question: mcpQ, options: ["yes", "no"], autoAnswer: true } } });
-mcp.stdin.end();
-const mcpCode = await new Promise((res) => {
-  const t = setTimeout(() => { mcp.kill(); res(-1); }, 30_000);
-  mcp.on("close", (c) => { clearTimeout(t); res(c); });
-});
 ok(mcpCode === 0 && /"name"\s*:\s*"(score_cline_options|jev-percent)"/.test(mcpOut), "MCP server answers initialize + tools/list", mcpOut.slice(0, 300));
 ok(/enrichedOptions/.test(mcpOut), "MCP server returns enriched option labels", mcpOut.slice(-300));
+ok(/DO NOT ask the user/.test(mcpOut), "autoAnswer response carries the skip-asking directive");
 const mcpRows = readFileSync(join(logs, "jev-hook.jsonl"), "utf8").trim().split("\n")
   .map((l) => JSON.parse(l)).filter((e) => e.question === mcpQ);
 const mcpSeq = mcpRows.map((e) => `${e.event}/${e.source}`).join(",");
@@ -147,7 +192,6 @@ ok(
 ok(typeof mcpRows.find((e) => e.event === "enriched")?.state === "string", "MCP enriched row records the state sent to Jev");
 const mcpAuto = mcpRows.find((e) => e.event === "enriched" && typeof e.reason === "string" && e.reason.startsWith("auto_answer: "));
 ok(typeof mcpAuto?.reason === "string", "autoAnswer records the decision on the audit row", JSON.stringify(mcpRows.slice(-2)));
-ok(/DO NOT ask the user/.test(mcpOut), "autoAnswer response carries the skip-asking directive");
 
 // 9) README uninstall — the three files go away
 for (const f of ["PreToolUse.cjs", "PostToolUse.cjs", "jev-hook-lib.cjs"]) rmSync(join(hooks, f), { force: true });
