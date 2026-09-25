@@ -20,5 +20,7 @@ logs/
 
 # hook installs
 hooks/*.bak
-# generated library — rebuilt by `npm run install:hook`
+# generated libraries — rebuilt from src/ by install-hook.mjs (root: `npm run install:hook`,
+# package: `npm run prepack`). Never committed, never edited by hand.
 hooks/jev-hook-lib.cjs
+packages/cline-plugin/hooks/jev-hook-lib.cjs

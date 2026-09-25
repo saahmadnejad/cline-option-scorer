@@ -29,6 +29,46 @@ jobs:
   publish:
     # Trusted publishing only supports cloud-hosted runners (not self-hosted).
     runs-on: ubuntu-latest
+    # ONE release publishes all three artifacts. Each gets its own job so one
+    # bad package cannot block the others (fail-fast: false), and each runs its
+    # own verify + fresh-install smoke before its own `npm publish`.
+    #
+    # Version/tag scheme: all three packages share ONE version line, so the
+    # release tag `vX.Y.Z` must equal every manifest's version. A package whose
+    # version is already on npm is skipped (a release can re-run safely).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: .
+            required: >-
+              hooks/PreToolUse.cjs
+              cline-plugin.js
+              mcp-server.js
+              src/cli.js
+              src/jev-client.js
+              scripts/install-hook.mjs
+              skills/jev-percentages/SKILL.md
+              README.md
+          - dir: packages/jev-mcp
+            required: >-
+              src/mcp-server.js
+              src/cli.js
+              src/jev-client.js
+              src/jev-config.js
+              README.md
+              LICENSE
+          - dir: packages/cline-plugin
+            required: >-
+              cline-plugin.js
+              hooks/PreToolUse.cjs
+              hooks/jev-hook-lib.cjs
+              src/cli.js
+              scripts/install-hook.mjs
+              skills/jev-percentages/SKILL.md
+              .clinerules
+              README.md
+    name: publish ${{ matrix.dir == '.' && 'root' || matrix.dir }}
     steps:
       - uses: actions/checkout@v7
 
@@ -64,28 +104,39 @@ jobs:
             console.log(`npm ${process.argv[1]} is new enough for trusted publishing`);
           ' "$(npm --version)"
 
-      - run: npm ci
+      - name: Install root dependencies
+        if: matrix.dir == '.'
+        run: npm ci
 
-      - name: Verify the release tag matches package.json
+      - name: Verify the release tag matches this package's version
         run: |
-          VERSION="$(npm pkg get version | tr -d '"')"
+          VERSION="$(node -p "require('./${{ matrix.dir }}/package.json').version")"
+          PKG="$(node -p "require('./${{ matrix.dir }}/package.json').name")"
           TAG="${GITHUB_REF_NAME#v}"
           if [ "$TAG" != "$VERSION" ]; then
-            echo "::error::release tag '$GITHUB_REF_NAME' does not match package.json version '$VERSION'"
+            echo "::error::release tag '$GITHUB_REF_NAME' does not match $PKG version '$VERSION'"
             exit 1
           fi
+          echo "$PKG@$VERSION"
 
-      - run: npm run verify
+      # Root `verify` is already chained across the three packages; a package job
+      # verifies only itself.
+      - name: Verify
+        run: |
+          if [ "${{ matrix.dir }}" = "." ]; then npm run verify; else npm --prefix "${{ matrix.dir }}" run verify; fi
 
-      # Release hygiene (.clinerules): every artifact — the legacy root tarball
-      # AND both packages — must pass a fresh-install smoke before publishing.
-      - run: npm run smoke
+      # Release hygiene (.clinerules): a brand-new install of THIS artifact must
+      # work before it can be published. `npm run smoke` at the root chains all
+      # three; each package job smokes only its own tarball.
+      - name: Fresh-install smoke
+        run: |
+          if [ "${{ matrix.dir }}" = "." ]; then node scripts/smoke-fresh-install.mjs; else npm --prefix "${{ matrix.dir }}" run smoke; fi
 
       - name: Skip if this version is already published
         id: published
         run: |
-          PKG="$(npm pkg get name | tr -d '"')"
-          VERSION="$(npm pkg get version | tr -d '"')"
+          PKG="$(node -p "require('./${{ matrix.dir }}/package.json').name")"
+          VERSION="$(node -p "require('./${{ matrix.dir }}/package.json').version")"
           if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
             echo "already=true" >> "$GITHUB_OUTPUT"
             echo "::notice::$PKG@$VERSION is already on npm - the verification above is the release check, skipping publish"
@@ -94,6 +145,10 @@ jobs:
           fi
 
       - name: Assert the tarball ships what we expect
+        # Run inside the package: `npm pack <dir>` would be read as a git
+        # shorthand spec, and `working-directory` is also what makes each
+        # package's own `prepack` (hook-lib generation) run for its tarball.
+        working-directory: ${{ matrix.dir }}
         run: |
           npm pack --dry-run --json > /tmp/pack.json
           node -e '
@@ -102,25 +157,17 @@ jobs:
             const data = require("/tmp/pack.json");
             const entry = Array.isArray(data) ? data[0] : data[Object.keys(data)[0]];
             const files = entry.files.map((f) => f.path);
-            const required = [
-              "hooks/PreToolUse.cjs",
-              "cline-plugin.js",
-              "mcp-server.js",
-              "src/cli.js",
-              "src/jev-client.js",
-              "scripts/install-hook.mjs",
-              "skills/jev-percentages/SKILL.md",
-              "README.md",
-            ];
+            const required = process.argv[1].split(/\s+/).filter(Boolean);
             const missing = required.filter((p) => !files.includes(p));
             if (missing.length) { console.error("missing from tarball:", missing); process.exit(1); }
             console.log(`tarball ok: ${files.length} files`);
-          '
+          ' '${{ matrix.required }}'
 
       - name: Publish to npm
         if: steps.published.outputs.already != 'true'
+        working-directory: ${{ matrix.dir }}
         run: |
-          VERSION="$(npm pkg get version | tr -d '"')"
+          VERSION="$(node -p "require('./package.json').version")"
           if [[ "$VERSION" == *-* ]]; then
             echo "pre-release $VERSION -> dist-tag next"
             npm publish --provenance --access public --tag next
@@ -131,8 +178,8 @@ jobs:
         # `--provenance` is passed explicitly even though trusted publishing is
         # documented to attach provenance automatically: in practice it is not
         # always automatic, and the flag is harmless. `--access public` is also
-        # in publishConfig; it is repeated so the first publish of this scoped
-        # package cannot accidentally go out as restricted.
+        # in each package's publishConfig; it is repeated so the first publish of
+        # a scoped package cannot accidentally go out as restricted.
         #
         # Deliberately NO `env: NODE_AUTH_TOKEN:` block - see the setup-node note
         # above. With no token in the environment, npm uses OIDC.

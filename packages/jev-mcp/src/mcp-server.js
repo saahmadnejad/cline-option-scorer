@@ -57,10 +57,20 @@ function sendToolText(id, text, isError = false) {
   send(id, { content: [{ type: "text", text }], isError });
 }
 
-function validate(args) {
+// The universal `score_options` is deliberately uncapped, but the Cline alias
+// keeps Cline's own schema limit: ask_followup_question rejects more than 5
+// ("Too big: expected array to have <=5 items"), so a 6-option enrichment there
+// is a result the model cannot use. Say so, so the model fixes the question
+// instead of composing one Cline will reject outright.
+const CLINE_MAX_OPTIONS = 5;
+
+function validate(args, { cline = false } = {}) {
   if (typeof args.question !== "string" || !args.question.trim()) return "`question` must be a non-empty string";
   if (!Array.isArray(args.options)) return "`options` must be an array of strings";
   if (args.options.length < 2) return "`options` needs at least 2 labels to be worth scoring";
+  if (cline && args.options.length > CLINE_MAX_OPTIONS) {
+    return `\`options\` must have at most ${CLINE_MAX_OPTIONS} labels - Cline's ask_followup_question rejects more. Merge or drop options and retry.`;
+  }
   if (!args.options.every((o) => typeof o === "string" && o.trim())) return "every option must be a non-empty string";
   return null;
 }
@@ -87,7 +97,7 @@ async function handle(msg) {
       return;
     }
     const args = params?.arguments || {};
-    const problem = validate(args);
+    const problem = validate(args, { cline: toolName === COMPAT_TOOL.name });
     if (problem) {
       sendToolText(id, `Invalid arguments for ${toolName}: ${problem}`, true);
       return;
