@@ -32,3 +32,10 @@ Score options from a terminal:
 ```bash
 jev-cline-option-scorer --question "Which database?" --option "PostgreSQL" --option "SQLite"
 ```
+
+## Publishing
+
+Released from this repo with the legacy root package on one shared version line;
+a GitHub Release (`vX.Y.Z`) publishes all three. The first version of this
+package was published by hand, because npm cannot create a package through
+trusted publishing (OIDC) — from then on, releases are fully automated.

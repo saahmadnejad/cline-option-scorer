@@ -78,6 +78,11 @@ function buildLibSource() {
 
 // Target dir comes from --dir only — no CLINE_HOOKS_DIR env lookup.
 const argv = process.argv.slice(2);
+// --quiet silences progress output. `npm pack` runs this as `prepack`, and npm
+// merges a lifecycle script's stdout into the pack output — which corrupts the
+// `--json` tarball listing the release workflow parses.
+const QUIET = argv.includes("--quiet");
+const say = (...a) => { if (!QUIET) console.log(...a); };
 const dirFlag = argv.indexOf("--dir");
 const targetDir = resolve(
   dirFlag >= 0 && argv[dirFlag + 1] ? argv[dirFlag + 1] : join(homedir(), ".cline", "hooks")
@@ -107,12 +112,12 @@ function installOne(name, content) {
     const current = readFileSync(target, "utf8");
     if (current === content) {
       chmodSync(target, 0o755);
-      console.log(`[install-hook] already up to date: ${target}`);
+      say(`[install-hook] already up to date: ${target}`);
       return;
     }
     const backup = `${target}.bak`;
     writeFileSync(backup, current);
-    console.log(`[install-hook] backed up previous hook -> ${backup}`);
+    say(`[install-hook] backed up previous hook -> ${backup}`);
   }
   writeFileSync(target, content);
   chmodSync(target, 0o755);
@@ -121,7 +126,7 @@ function installOne(name, content) {
     console.error(`[install-hook] copy verification FAILED for ${target}`);
     process.exit(1);
   }
-  console.log(`[install-hook] installed + verified: ${target} (mode 755)`);
+  say(`[install-hook] installed + verified: ${target} (mode 755)`);
 }
 
 installOne("PreToolUse.cjs", readFileSync(HOOK_ENTRY, "utf8"));
@@ -131,12 +136,12 @@ installOne("PostToolUse.cjs", readFileSync(POST_ENTRY, "utf8"));
 const oldJs = join(targetDir, "PreToolUse.js");
 if (existsSync(oldJs)) {
   unlinkSync(oldJs);
-  console.log(`[install-hook] removed stale PreToolUse.js (replaced by PreToolUse.cjs)`);
+  say(`[install-hook] removed stale PreToolUse.js (replaced by PreToolUse.cjs)`);
 }
 const oldLib = join(targetDir, "jev-hook-lib.js");
 if (existsSync(oldLib)) {
   unlinkSync(oldLib);
-  console.log(`[install-hook] removed stale jev-hook-lib.js (replaced by jev-hook-lib.cjs)`);
+  say(`[install-hook] removed stale jev-hook-lib.js (replaced by jev-hook-lib.cjs)`);
 }
 installOne("jev-hook-lib.cjs", libSource);
 
@@ -155,11 +160,11 @@ if (dirFlag < 0) {
     mkdirSync(dirname(dst), { recursive: true });
     const content = readFileSync(src, "utf8");
     if (existsSync(dst) && readFileSync(dst, "utf8") === content) {
-      console.log(`[install-hook] already up to date: ${dst}`);
+      say(`[install-hook] already up to date: ${dst}`);
       continue;
     }
     writeFileSync(dst, content);
-    console.log(`[install-hook] installed prompt steering: ${dst}`);
+    say(`[install-hook] installed prompt steering: ${dst}`);
   }
 }
 
@@ -188,5 +193,5 @@ if (rivals.length) {
       `Cline runs every match, so remove it if the question gets scored twice.`
   );
 }
-console.log("[install-hook] open a NEW Cline session so the hook is picked up;");
-console.log("[install-hook] verify with: tail -n 5 ~/.cline/data/logs/jev-hook.jsonl");
+say("[install-hook] open a NEW Cline session so the hook is picked up;");
+say("[install-hook] verify with: tail -n 5 ~/.cline/data/logs/jev-hook.jsonl");

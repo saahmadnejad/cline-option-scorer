@@ -10,6 +10,18 @@ name: Publish to npm
 #     publishes only on `release: published`.
 #   - `published` fires for pre-releases too; the publish step below routes a
 #     prerelease version to the `next` dist-tag so it never becomes `latest`.
+#
+# FIRST PUBLISH OF A NEW PACKAGE (read before cutting a release):
+#   npm cannot publish a package's INITIAL version with trusted publishing
+#   (npm/cli#8544) - the package must already exist on npmjs.com before a
+#   trusted publisher can be configured for it. @donbee/jev-mcp and
+#   @donbee/cline-plugin-jev-percent are new here, so each must be published
+#   ONCE by hand before this workflow can publish it:
+#     1) npm publish --access public      (locally, signed in as the scope owner)
+#     2) npmjs.com -> package -> Settings -> Trusted Publisher -> add this repo
+#        and this workflow file
+#   The preflight step below fails with this message instead of letting the
+#   publish step die on an opaque 401/403 from the registry.
 on:
   release:
     types: [published]
@@ -103,6 +115,16 @@ jobs:
             }
             console.log(`npm ${process.argv[1]} is new enough for trusted publishing`);
           ' "$(npm --version)"
+
+      - name: Preflight - the package exists on npm and has a trusted publisher
+        run: |
+          PKG="$(node -p "require('./${{ matrix.dir }}/package.json').name")"
+          if ! npm view "$PKG" version >/dev/null 2>&1; then
+            echo "::error::$PKG is not on npm yet, so it cannot be published from this OIDC-only workflow."
+            echo "::error::Publish it once by hand (npm publish --access public), then configure its trusted publisher on npmjs.com. See the comment at the top of this workflow."
+            exit 1
+          fi
+          echo "$PKG exists on npm: $(npm view "$PKG" version)"
 
       - name: Install root dependencies
         if: matrix.dir == '.'

@@ -121,3 +121,10 @@ Node >= 18. The client (`src/jev-client.js`) is byte-identical to the Cline
 package's copy and uses only `fetch` + `AbortSignal.timeout`; the Node 22.5
 floor on the Cline packages comes from `node:sqlite` in the hook core, which
 this package does not ship.
+
+## Publishing
+
+Released from this repo with the legacy root package on one shared version line;
+a GitHub Release (`vX.Y.Z`) publishes all three. The first version of this
+package was published by hand, because npm cannot create a package through
+trusted publishing (OIDC) — from then on, releases are fully automated.

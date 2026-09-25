@@ -30,6 +30,7 @@ const IDENTICAL = [
   ["cline-plugin.js", "packages/cline-plugin/cline-plugin.js"],
   ["hooks/PreToolUse.cjs", "packages/cline-plugin/hooks/PreToolUse.cjs"],
   ["hooks/PostToolUse.cjs", "packages/cline-plugin/hooks/PostToolUse.cjs"],
+  ["scripts/install-hook.mjs", "packages/cline-plugin/scripts/install-hook.mjs"],
   ["skills/jev-percentages/SKILL.md", "packages/cline-plugin/skills/jev-percentages/SKILL.md"],
 ];
 

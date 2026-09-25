@@ -34,6 +34,14 @@ const run = (cmd, args, env = {}) => {
   return { status: r.status, out: `${r.stdout || ""}${r.stderr || ""}` };
 };
 
+// The checks below hit the real free endpoint, which occasionally exceeds the
+// client's 10s timeoutMs and fails open. Retry once before believing a failure,
+// so a single slow call cannot fail a release with a message that looks like a
+// regression.
+const LIVE_ATTEMPTS = 3;
+const liveChecks = [];
+const liveCheck = (label, fn) => liveChecks.push([label, fn]);
+
 console.log(`[smoke] node ${process.versions.node}, packing ${pkg.name}@${pkg.version} …`);
 mkdirSync(work, { recursive: true });
 
@@ -53,32 +61,61 @@ for (const b of ["jev-option-scorer", "jev-mcp"])
 const installed = JSON.parse(readFileSync(join(prefix, "node_modules", pkg.name, "package.json"), "utf8"));
 ok(installed.version === pkg.version, `installed version ${installed.version} matches repo`);
 
-// 3) README CLI — the documented `npx -y -p <pkg> jev-option-scorer …` shape,
+// 3) README CLI - the documented `npx -y -p <pkg> jev-option-scorer ...` shape,
 // run against the LOCAL tarball so this validates the invocation (package-name
 // npx would pick the jev-mcp bin = the JSON-RPC server, not the CLI).
-const npx = run("npx", ["-y", "-p", tarball, "jev-option-scorer", "--question", "Smoke npx CLI works?", "--option", "yes", "--option", "no"]);
-ok(npx.status === 0 && /%/.test(npx.out), "documented npx CLI invocation scores with percentages", npx.out.slice(-300));
-
-// 4) installed CLI directly — the global-install README example
-const cli = run(join(bins, "jev-option-scorer"), ["--question", "Smoke CLI works?", "--option", "yes", "--option", "no"]);
-ok(cli.status === 0 && /%/.test(cli.out), "jev-option-scorer bin scores with percentages", cli.out.slice(-300));
-
-// 5) MCP server: handshake + one real scoring call through the jev-mcp bin
-const mcp = spawn(NODE, [join(prefix, "node_modules", pkg.name, "src", "mcp-server.js")], {
-  env: { ...process.env, HOME: home }, cwd: work, stdio: ["pipe", "pipe", "pipe"],
+let npx = { status: 1, out: "" };
+liveCheck("npx CLI", () => {
+  npx = run("npx", ["-y", "-p", tarball, "jev-option-scorer", "--question", "Smoke npx CLI works?", "--option", "yes", "--option", "no"]);
+  return npx.status === 0 && /%/.test(npx.out);
 });
+
+// 4) installed CLI directly - the global-install README example
+let cli = { status: 1, out: "" };
+liveCheck("CLI", () => {
+  cli = run(join(bins, "jev-option-scorer"), ["--question", "Smoke CLI works?", "--option", "yes", "--option", "no"]);
+  return cli.status === 0 && /%/.test(cli.out);
+});
+
+// 5) MCP server: handshake + scoring calls through the jev-mcp bin
+let mcpCode = -1;
 let mcpOut = "";
-mcp.stdout.on("data", (c) => (mcpOut += c));
-const mcpSend = (msg) => mcp.stdin.write(JSON.stringify(msg) + "\n");
-mcpSend({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } });
-mcpSend({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
-mcpSend({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "score_options", arguments: { state: "smoke context", question: `Smoke MCP scoring works? ${Date.now()}`, options: ["yes", "no"] } } });
-mcpSend({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "score_options", arguments: { state: "smoke context", question: "Auto?", options: ["yes", "no"], autoAnswer: true } } });
-mcp.stdin.end();
-const mcpCode = await new Promise((res) => {
-  const t = setTimeout(() => { mcp.kill(); res(-1); }, 30_000);
-  mcp.on("close", (c) => { clearTimeout(t); res(c); });
+liveCheck("MCP", async () => {
+  const mcp = spawn(NODE, [join(prefix, "node_modules", pkg.name, "src", "mcp-server.js")], {
+    env: { ...process.env, HOME: home }, cwd: work, stdio: ["pipe", "pipe", "pipe"],
+  });
+  mcpOut = "";
+  mcp.stdout.on("data", (c) => (mcpOut += c));
+  const send = (msg) => mcp.stdin.write(JSON.stringify(msg) + "\n");
+  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } });
+  send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+  send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "score_options", arguments: { state: "smoke context", question: `Smoke MCP scoring works? ${Date.now()}`, options: ["yes", "no"] } } });
+  send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "score_options", arguments: { state: "smoke context", question: "Auto?", options: ["yes", "no"], autoAnswer: true } } });
+  mcp.stdin.end();
+  mcpCode = await new Promise((res) => {
+    const t = setTimeout(() => { mcp.kill(); res(-1); }, 30_000);
+    mcp.on("close", (c) => { clearTimeout(t); res(c); });
+  });
+  return mcpCode === 0 && /enrichedOptions/.test(mcpOut);
 });
+
+// Three attempts, not one: the free endpoint intermittently needs longer than
+// the 10s default timeout, and a single hiccup must not fail a release. Still
+// fully zero-config - the alternative (seeding a config file with a bigger
+// timeoutMs) would stop these checks proving the zero-config path.
+for (const [label, fn] of liveChecks) {
+  let pass = false;
+  for (let attempt = 1; attempt <= LIVE_ATTEMPTS && !pass; attempt++) {
+    if (attempt > 1) {
+      console.log(`  ...  retrying "${label}" (attempt ${attempt}/${LIVE_ATTEMPTS}; the free endpoint is occasionally slow)`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    pass = await fn();
+  }
+}
+
+ok(npx.status === 0 && /%/.test(npx.out), "documented npx CLI invocation scores with percentages", npx.out.slice(-300));
+ok(cli.status === 0 && /%/.test(cli.out), "jev-option-scorer bin scores with percentages", cli.out.slice(-300));
 ok(mcpCode === 0 && /"name"\s*:\s*"score_options"/.test(mcpOut), "MCP server answers initialize + tools/list", mcpOut.slice(0, 300));
 ok(/enrichedOptions/.test(mcpOut), "MCP server returns enriched option labels", mcpOut.slice(-300));
 ok(/DO NOT ask the user/.test(mcpOut), "autoAnswer response carries the skip-asking directive", mcpOut.slice(-300));
