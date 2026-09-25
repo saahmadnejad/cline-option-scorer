@@ -27,11 +27,24 @@ cline-option-scorer-install-hook           # -> ~/.cline/hooks/PreToolUse.cjs + 
 > | `@donbee/jev-mcp` | **Every other MCP client** (Claude Desktop, Cursor, Zed, …) — a dependency-free stdio server. It keeps no state, so it writes **no** audit trail (see its README). |
 > | `@donbee/cline-option-scorer` (this one) | The legacy all-in-one package. Still maintained, and still the only artifact here whose MCP server writes the `source: "mcp"` trail documented below. |
 >
-> Both new packages are published from this repo on release, on the same
-> version line as this one. The two MCP servers deliberately differ: this one
-> keeps Cline's ≤5-option cap and the audit trail, while `@donbee/jev-mcp` is
+> Both new packages are released from this repo on the same version line as this
+> one — see [Releases](#releases). The two MCP servers deliberately differ: this
+> one keeps Cline's ≤5-option cap and the audit trail, while `@donbee/jev-mcp` is
 > universal (uncapped, stateless) and keeps the cap only on its
 > `score_cline_options` alias.
+
+### Installing the split packages
+
+```bash
+# Cline users — plugin, PreToolUse/PostToolUse hooks, decision trail
+npm install -g @donbee/cline-plugin-jev-percent
+jev-cline-install-hook
+
+# Every other MCP client — universal stdio server (stateless) + its CLI
+npx -y @donbee/jev-mcp                       # JSON-RPC on stdin, for the MCP config
+npx -y -p @donbee/jev-mcp jev-option-scorer --question "Which database?" \
+  --option "PostgreSQL" --option "SQLite" --option "Redis"
+```
 
 Three independent surfaces, same scoring core (`src/jev-client.js`):
 
@@ -213,3 +226,24 @@ cat ask.xml | node src/cli.js                                 # enrich real Clin
 
 `jev-1.13*` are `decision` models — no chat, no tool calls, only SystemOne
 calls. Develop with a chat model, score with Jev.
+
+## Releases
+
+All three packages share **one version line** and are published from this repo by
+`.github/workflows/publish.yml`, which runs when a GitHub Release is published:
+
+1. the release tag (`vX.Y.Z`) must equal the `version` in **all three**
+   manifests — otherwise the release fails before anything is published
+2. each package gets its own job: `verify`, a fresh-install smoke of its own
+   tarball, then `npm publish` (trusted publishing over OIDC — there is no
+   `NPM_TOKEN`). A version already on npm is skipped, so a release can be re-run
+   safely, and one bad package does not block the other two
+
+The **first** publish of a new package cannot use OIDC: npm requires the package
+to exist before a trusted publisher can be configured for it
+([npm/cli#8544](https://github.com/npm/cli/issues/8544)). So a brand-new package
+is published once by hand (`npm publish --access public`), gets a trusted
+publisher on npmjs.com, and is automated from then on.
+
+`.github/workflows/ci.yml` runs `verify` — including the drift guard over the
+hand-maintained copies — on every pull request and push to `main`.
