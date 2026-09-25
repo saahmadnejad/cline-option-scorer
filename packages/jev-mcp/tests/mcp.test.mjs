@@ -128,3 +128,23 @@ test("MCP keeps colliding and over-length labels distinct", async () => {
   }
 });
 
+// Regression: the Cline-facing alias must keep Cline's own <=5 schema limit
+// (ask_followup_question rejects more), while the universal tool stays uncapped.
+test("score_cline_options keeps Cline's 5-option cap, score_options stays universal", async () => {
+  const many = ["a", "b", "c", "d", "e", "f"];
+  const weights = { a: 0.67, b: 0.04, c: 0.06, d: 0.04, e: 0.02, f: 0.17 };
+  const stub = await startStub((body, res) => res.end(JSON.stringify(jevAnswer(weights)(body))));
+  try {
+    const { out } = await runMcp([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "score_cline_options", arguments: { question: "Q?", options: many } } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "score_options", arguments: { question: "Q?", options: many } } },
+    ], { baseUrl: stub.url });
+    const [alias, universal] = out.trim().split("\n").map((l) => JSON.parse(l));
+    assert.match(alias.result.content[0].text, /at most 5 labels/);
+    assert.equal(alias.result.isError, true, "Cline alias rejects >5 so the model fixes the question");
+    assert.equal(universal.result.isError, false, "universal tool scores any number of options");
+    assert.match(universal.result.content[0].text, /enrichedOptions/);
+  } finally {
+    await stub.close();
+  }
+});

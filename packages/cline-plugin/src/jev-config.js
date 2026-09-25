@@ -40,6 +40,10 @@ export const DEFAULTS = Object.freeze({
   historyTurns: 3, // how many past decision pairs to include
   maxStateChars: 2000, // hard cap for the whole state payload sent to Jev
   historyScope: "session", // "session" | "workspace" | "global"
+  // Opt-in only, and explicit: resolveConfig() reads DEFAULTS.autoAnswer, and
+  // the MCP/plugin path checks `autoAnswer === true`. Leaving it undefined made
+  // the default accidental (the universal server's copy always had false).
+  autoAnswer: false,
 });
 
 const FILE_NAME = "cline-jev.json";

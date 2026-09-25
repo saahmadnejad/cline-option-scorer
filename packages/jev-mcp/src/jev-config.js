@@ -1,4 +1,6 @@
-// jev-config.js — one config source for every surface (CLI, MCP, etc.)
+// jev-config.js — config for the universal MCP server + CLI (NOT a copy of the
+// root cline-jev.json resolver: this surface has no decision trail, so the
+// history/logging knobs below do not exist here — see README "Configuration").
 // Configuration lives in `jev.json` or `cline-jev.json`.
 // Precedence per key: explicit arg > config file > default.
 //
@@ -7,6 +9,9 @@
 //   2. <home>/.config/jev/jev.json
 //   3. <home>/.cline/cline-jev.json
 //   4. <home>/.config/cline-jev/cline-jev.json
+//
+// Deliberately NOT read here (Cline-surface only, ignored silently):
+// includeHistory, historyTurns, maxStateChars, historyScope, logDir, dbPath.
 import { createRequire as __createRequire } from "node:module";
 const __req = typeof require === "function" ? require : __createRequire(import.meta.url);
 const __fs = __req("node:fs");

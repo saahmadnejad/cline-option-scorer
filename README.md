@@ -19,6 +19,20 @@ cline-option-scorer --state "..." --question "..." --option "A" --option "B"
 cline-option-scorer-install-hook           # -> ~/.cline/hooks/PreToolUse.cjs + jev-hook-lib.cjs
 ```
 
+> **Status / which package do I install?**
+>
+> | Package | Use it for |
+> |---|---|
+> | `@donbee/cline-plugin-jev-percent` | **Cline users** — the plugin, the `PreToolUse`/`PostToolUse` hooks and the decision trail. |
+> | `@donbee/jev-mcp` | **Every other MCP client** (Claude Desktop, Cursor, Zed, …) — a dependency-free stdio server. It keeps no state, so it writes **no** audit trail (see its README). |
+> | `@donbee/cline-option-scorer` (this one) | The legacy all-in-one package. Still maintained, and still the only artifact here whose MCP server writes the `source: "mcp"` trail documented below. |
+>
+> Both new packages are published from this repo on release, on the same
+> version line as this one. The two MCP servers deliberately differ: this one
+> keeps Cline's ≤5-option cap and the audit trail, while `@donbee/jev-mcp` is
+> universal (uncapped, stateless) and keeps the cap only on its
+> `score_cline_options` alias.
+
 Three independent surfaces, same scoring core (`src/jev-client.js`):
 
 | Surface | File | Use when |

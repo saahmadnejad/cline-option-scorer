@@ -1,6 +1,6 @@
 {
   "name": "@donbee/cline-option-scorer",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Add percentage to each Cline ask_followup_question option using Jev 1.13 (TypeSafe / OpenCode Zen jev-1.13-free)",
   "type": "module",
   "main": "src/jev-client.js",
@@ -36,7 +36,7 @@
     "install:hook": "node scripts/install-hook.mjs",
     "check": "node --check hooks/PreToolUse.cjs && node --check hooks/PostToolUse.cjs && node --check mcp-server.js && node --check cline-plugin.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/cline-interceptor.js && node --check scripts/install-hook.mjs && node --check scripts/smoke-fresh-install.mjs",
     "smoke": "node scripts/smoke-fresh-install.mjs && npm --prefix packages/jev-mcp run smoke && npm --prefix packages/cline-plugin run smoke",
-    "verify": "npm run check && npm test",
+    "verify": "npm run check && npm test && npm --prefix packages/jev-mcp run verify && npm --prefix packages/cline-plugin run verify",
     "prepublishOnly": "npm run verify"
   },
   "files": [

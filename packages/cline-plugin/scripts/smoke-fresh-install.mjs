@@ -51,7 +51,7 @@ const tarball = join(
 const install = run("npm", ["install", "--prefix", prefix, tarball, "@cline/sdk", "--no-audit", "--no-fund"]);
 ok(install.status === 0, "tarball installs into a clean prefix (with @cline/sdk)", install.out.slice(-300));
 const bins = join(prefix, "node_modules", ".bin");
-for (const b of ["cline-option-scorer", "cline-option-scorer-install-hook"])
+for (const b of ["jev-cline-option-scorer", "jev-cline-install-hook"])
   ok(existsSync(join(bins, b)), `bin present: ${b}`);
 const installed = JSON.parse(readFileSync(join(prefix, "node_modules", pkg.name, "package.json"), "utf8"));
 ok(installed.version === pkg.version, `installed version ${installed.version} matches repo`);
@@ -70,7 +70,7 @@ const imported = run(NODE, ["--input-type=module", "-e",
 ok(imported.status === 0 && /plugin ok/.test(imported.out), "plugin module imports and exposes setup + beforeTool", imported.out.slice(-300));
 
 // 4) hook installer, as README says, into the new user's home
-const inst = run(join(bins, "cline-option-scorer-install-hook"));
+const inst = run(join(bins, "jev-cline-install-hook"));
 ok(inst.status === 0, "install-hook exits 0", inst.out.slice(-300));
 const hooks = join(home, ".cline", "hooks");
 for (const f of ["PreToolUse.cjs", "PostToolUse.cjs", "jev-hook-lib.cjs"])
@@ -95,7 +95,7 @@ ok(/"cancel":false/.test(hookRun.stdout || ""), "hook enriches and allows the qu
 ok(/\(\d+\.?\d*%\)/.test(hookRun.stdout || ""), "percentages present in override");
 
 // 6) zero-config CLI — README's global-install example
-const cli = run(join(bins, "cline-option-scorer"), ["--question", "Smoke CLI works?", "--option", "yes", "--option", "no"]);
+const cli = run(join(bins, "jev-cline-option-scorer"), ["--question", "Smoke CLI works?", "--option", "yes", "--option", "no"]);
 ok(cli.status === 0 && /%/.test(cli.out), "zero-config CLI scores with percentages", cli.out.slice(-300));
 
 // 7) README uninstall — the hook files and steering files go away
