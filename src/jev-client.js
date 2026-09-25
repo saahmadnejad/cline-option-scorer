@@ -14,9 +14,18 @@ const PROVIDER_DEFAULTS = {
   "zen-free": { baseUrl: "https://opencode.ai/zen/v1/systemone", model: "jev-1.13-free" },
 };
 
-function slug(s) {
-  const sl = String(s).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-  return (sl || "option").slice(0, 40);
+// Criterion IDs are positional (`opt_0`, `opt_1`, …) and `criteria` doubles as
+// the ID → label map that decodes the response. Labels are arbitrary text, so
+// deriving the ID from the label is lossy: "A & B" and "A-B" both normalize to
+// `a_b`, and two labels sharing their first 40 characters truncate to the same
+// key — either way one option overwrites the other in `criteria` and the wrong
+// option gets the probability.
+function buildCriteria(options) {
+  const criteria = {};
+  options.forEach((opt, i) => {
+    criteria[`opt_${i}`] = opt;
+  });
+  return criteria;
 }
 
 export async function scoreOptions({ state, question, options, ...overrides }) {
@@ -33,8 +42,7 @@ export async function scoreOptions({ state, question, options, ...overrides }) {
     throw new Error("every option must be a non-empty string");
   }
 
-  const criteria = {};
-  for (const opt of options) criteria[slug(opt)] = opt;
+  const criteria = buildCriteria(options);
 
   const body = {
     state: state || question,
@@ -68,10 +76,9 @@ export async function scoreOptions({ state, question, options, ...overrides }) {
   if (!ans?.probabilities) throw new Error("Bad Jev response: " + text.slice(0, 500));
 
   const probabilities = {};
-  for (const opt of options) probabilities[opt] = ans.probabilities[slug(opt)] ?? 0;
-
-  const choiceSlug = ans.choice;
-  const choice = options.find((o) => slug(o) === choiceSlug) ?? choiceSlug;
+  for (const [id, opt] of Object.entries(criteria)) probabilities[opt] = ans.probabilities[id] ?? 0;
+  // `ans.choice` is a criterion ID — decode it back through the same map.
+  const choice = criteria[ans.choice] ?? ans.choice;
   return { choice, probabilities, confidence: ans.confidence ?? 0, model: json.model, provider };
 }
 

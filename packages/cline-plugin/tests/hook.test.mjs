@@ -57,24 +57,24 @@ async function startStub(handler) {
   return base;
 }
 
+// Mirrors the real API contract: response probabilities/choice are keyed by
+// the criterion IDs from the request's `criteria` map (e.g. `opt_0`), so the
+// stub echoes per-ID probabilities derived from the original labels.
 function jevAnswer(probabilities) {
   return (body) => {
     const criteria = body?.questions?.pick?.criteria ?? {};
-    const sum = Object.values(probabilities).reduce((a, b) => a + b, 0);
-    const normalized = {};
-    for (const [k, v] of Object.entries(probabilities)) {
-      const slug = k.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
-      normalized[slug] = v / sum;
-    }
-    const slugEntries = Object.entries(normalized);
-    const topSlug = slugEntries.length ? slugEntries.sort((a, b) => b[1] - a[1])[0][0] : "none";
+    const entries = Object.entries(criteria); // [id, label]
+    const sum = entries.reduce((acc, [, label]) => acc + (probabilities[label] ?? 0), 0) || 1;
+    const mapped = {};
+    for (const [id, label] of entries) mapped[id] = (probabilities[label] ?? 0) / sum;
+    const top = entries.slice().sort((a, b) => mapped[b[0]] - mapped[a[0]])[0];
     return {
       model: "jev-1.13-free",
       answers: {
         pick: {
-          choice: topSlug,
-          confidence: normalized[topSlug] ?? 0,
-          probabilities: normalized,
+          choice: top?.[0] ?? "none",
+          confidence: top ? mapped[top[0]] : 0,
+          probabilities: mapped,
         },
       },
     };
@@ -158,10 +158,12 @@ test("scores a real Cline payload whose `options` arrived flattened as a JSON st
   };
 
   const stub = await startStub((body, res) => {
+    // Positional criterion IDs keep labels that slug-collide ("A & B"/"A-B")
+    // apart; the response is keyed by those IDs.
     assert.deepEqual(body.questions.pick.criteria, {
-      postgresql: "PostgreSQL",
-      sqlite: "SQLite",
-      mongodb: "MongoDB",
+      opt_0: "PostgreSQL",
+      opt_1: "SQLite",
+      opt_2: "MongoDB",
     });
     res.end(JSON.stringify(jevAnswer({ PostgreSQL: 0.7, SQLite: 0.2, MongoDB: 0.1 })(body)));
   });

@@ -13,9 +13,18 @@ const __req = typeof require === "function" ? require : __createRequire(import.m
 //   as the STRING '["A","B"]' - never as an array. The unflattened object is
 //   still present at `tool_call.input`. We prefer `tool_call.input` and fall
 //   back to decoding the stringified `parameters`, so both shapes work.
-function slug(s) {
-  const sl = String(s).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-  return (sl || "option").slice(0, 40);
+// Criterion IDs are positional (`opt_0`, `opt_1`, …) and `criteria` doubles as
+// the ID → label map used to decode the response. Labels are arbitrary text, so
+// deriving the ID from the label is lossy: "A & B" and "A-B" both normalize to
+// `a_b`, and two labels sharing their first 40 characters truncate to the same
+// key — either way one option overwrites the other and the wrong option gets
+// the probability.
+function buildCriteria(options) {
+  const criteria = {};
+  options.forEach((o, i) => {
+    criteria[`opt_${i}`] = o;
+  });
+  return criteria;
 }
 const hasPct = (s) => /\(\d+(\.\d+)?%\)\s*$/.test(String(s));
 const withPct = (o, p) => `${o} (${(p * 100).toFixed(1)}%)`;
@@ -293,8 +302,7 @@ function buildState(event, question) {
 async function score(state, question, options) {
   const cfg = resolveConfig();
   const known = PROVIDERS[cfg.provider] || PROVIDERS["zen-free"];
-  const criteria = {};
-  for (const o of options) criteria[slug(o)] = o;
+  const criteria = buildCriteria(options);
   const headers = { "Content-Type": "application/json" };
   const key = cfg.opencodeApiKey || cfg.typesafeApiKey;
   if (key) headers.Authorization = `Bearer ${key}`; // zen-free works anonymously
@@ -313,7 +321,7 @@ async function score(state, question, options) {
   const ans = JSON.parse(text).answers?.pick;
   if (!ans?.probabilities) throw new Error("bad Jev response");
   const probs = {};
-  for (const o of options) probs[o] = ans.probabilities[slug(o)] ?? 0;
+  for (const [id, o] of Object.entries(criteria)) probs[o] = ans.probabilities[id] ?? 0;
   return probs;
 }
 

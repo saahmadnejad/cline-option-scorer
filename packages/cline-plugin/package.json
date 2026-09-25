@@ -31,9 +31,11 @@
   },
   "scripts": {
     "install:hook": "node scripts/install-hook.mjs",
-    "check": "node --check hooks/PreToolUse.cjs && node --check hooks/PostToolUse.cjs && node --check cline-plugin.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/cline-interceptor.js && node --check scripts/install-hook.mjs",
+    "check": "node --check hooks/PreToolUse.cjs && node --check hooks/PostToolUse.cjs && node --check cline-plugin.js && node --check src/jev-client.js && node --check src/cli.js && node --check src/cline-interceptor.js && node --check scripts/install-hook.mjs && node --check scripts/smoke-fresh-install.mjs",
     "test": "node --test tests/*.mjs",
-    "verify": "npm run check && npm test"
+    "smoke": "node scripts/smoke-fresh-install.mjs",
+    "verify": "npm run check && npm test",
+    "prepublishOnly": "npm run verify && npm run smoke"
   },
   "files": [
     "src/",

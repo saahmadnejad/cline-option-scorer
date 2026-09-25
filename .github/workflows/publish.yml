@@ -77,6 +77,10 @@ jobs:
 
       - run: npm run verify
 
+      # Release hygiene (.clinerules): every artifact — the legacy root tarball
+      # AND both packages — must pass a fresh-install smoke before publishing.
+      - run: npm run smoke
+
       - name: Skip if this version is already published
         id: published
         run: |
